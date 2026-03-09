@@ -2,37 +2,67 @@ main:
   steps:
     - init:
         assign:
-          # This dynamically grabs the project ID it is deployed in
           - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
           - location: "us-central1"
-          
+
     - run_bgg_csv_job:
-        # Step 1: Run the Pre-Processor
-        call: googleapis.run.v1.namespaces.jobs.run
+        call: run_job_and_wait
         args:
-          name: ${"namespaces/" + project_id + "/jobs/bgg-csv-job"}
+          job_name: "bgg-csv-job"
+          project_id: ${project_id}
           location: ${location}
         result: csv_job_result
 
     - run_bgg_extractor_job:
-        # Step 2: Run the Main Extractor
-        call: googleapis.run.v1.namespaces.jobs.run
+        call: run_job_and_wait
         args:
-          name: ${"namespaces/" + project_id + "/jobs/bgg-extractor-job"}
+          job_name: "bgg-extractor-job"
+          project_id: ${project_id}
           location: ${location}
         result: extractor_job_result
 
     - run_boardlife_scraper_job:
-        # Step 3: Run the Korean Localization Scraper
-        call: googleapis.run.v1.namespaces.jobs.run
+        call: run_job_and_wait
         args:
-          name: ${"namespaces/" + project_id + "/jobs/boardlife-scraper-job"}
+          job_name: "boardlife-scraper-job"
+          project_id: ${project_id}
           location: ${location}
         result: scraper_job_result
 
     - finish:
-        return: 
-            message: "ETL Pipeline completed successfully!"
-            csv_status: ${csv_job_result}
-            extractor_status: ${extractor_job_result}
-            scraper_status: ${scraper_job_result}
+        return: "Full Pipeline Succeeded!"
+
+# --- Reusable Sub-workflow ---
+run_job_and_wait:
+  params: [job_name, project_id, location]
+  steps:
+    - start_job:
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + project_id + "/jobs/" + job_name}
+          location: ${location}
+        result: execution
+    
+    - wait_for_completion:
+        call: googleapis.run.v1.namespaces.executions.get
+        args:
+          name: ${execution.metadata.name}
+          location: ${location}
+        result: status
+    
+    - check_condition:
+        switch:
+          - condition: ${status.status.conditions[0].status == "Unknown"}
+            next: sleep_and_repeat
+          - condition: ${status.status.conditions[0].status == "False"}
+            raise: ${"Job " + job_name + " failed!"}
+        next: job_succeeded
+
+    - sleep_and_repeat:
+        call: sys.sleep
+        args:
+          seconds: 30
+        next: wait_for_completion
+
+    - job_succeeded:
+        return: ${status}

@@ -70,5 +70,17 @@ steps:
       - '--set-env-vars'
       - 'PROJECT_ID=boardgame-catalog-app,COLLECTION_NAME=boardgames'
 
+  # Step 6: Deploy the Workflow
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'workflows'
+      - 'deploy'
+      - 'bgg-main-pipeline'
+      - '--source'
+      - 'workflow.yaml'
+      - '--region'
+      - 'us-central1'
+
 images:
   - 'gcr.io/$PROJECT_ID/bgg-pipeline-image:latest'
