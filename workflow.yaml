@@ -84,7 +84,7 @@ run_job_and_wait:
           body:
             overrides:
               containerOverrides:
-                - env: ${default(map.get(default(overrides, {}), "env"), [])}
+                - env: ${default(map.get(overrides, "env"), [])}
         result: execution
     
     - wait_for_completion:
