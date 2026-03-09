@@ -43,21 +43,41 @@ def download_raw_from_gcs():
 
 def extract_base_games():
     base_games_list = []
-    print("📊 Extracting highly-rated base games from the raw dump...")
+    print("📊 Extracting base games (Ranked + Unranked with 73+ ratings)...")
+    
+    # NEW: Statistical threshold to include high-quality unranked games
+    RATING_THRESHOLD = 73 
+    
     with open(RAW_DUMP_FILENAME, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if row.get('is_expansion') == '1' or not row.get('rank') or row.get('rank') == '0':
+            # 1. Skip games that are explicitly marked as expansions
+            if row.get('is_expansion') == '1':
                 continue
-            if row.get('id') and row.get('name'):
-                base_games_list.append({'id': row.get('id'), 'name': row.get('name')})
+            
+            # 2. Extract numeric values safely
+            try:
+                rank = int(row.get('rank', 0))
+                usersrated = int(row.get('usersrated', 0))
+            except (ValueError, TypeError):
+                rank = 0
+                usersrated = 0
+            
+            # 3. Logic: Include if it is ranked OR if it's unranked but popular
+            is_ranked = rank > 0
+            is_popular_unranked = (rank == 0 and usersrated >= RATING_THRESHOLD)
+
+            if is_ranked or is_popular_unranked:
+                if row.get('id') and row.get('name'):
+                    base_games_list.append({'id': row.get('id'), 'name': row.get('name')})
+                    
+    print(f"✅ Extracted {len(base_games_list)} base games (added {len(base_games_list) - 30238} unranked games).")
     return base_games_list
 
 def fetch_expansions_sync(base_games_list):
     expansions = []
     chunks = [base_games_list[i:i + CHUNK_SIZE] for i in range(0, len(base_games_list), CHUNK_SIZE)]
     
-    # Exact headers from your working script
     headers = {
         'User-Agent': 'Mozilla/5.0', 
         'Authorization': f'Bearer {MY_BGG_TOKEN}'
@@ -65,11 +85,9 @@ def fetch_expansions_sync(base_games_list):
 
     print(f"\n🔍 Querying API for expansions across {len(base_games_list)} base games...")
     
-    # We use standard tqdm since we aren't using asyncio anymore
     for chunk in tqdm(chunks, desc="Finding Expansions"):
         base_ids = [game['id'] for game in chunk]
         
-        # Build URL using urllib exactly like your working script
         params = {"id": ",".join(base_ids)}
         url = f"https://boardgamegeek.com/xmlapi2/thing?{urllib.parse.urlencode(params)}"
         
@@ -99,13 +117,12 @@ def fetch_expansions_sync(base_games_list):
                                 'is_expansion': 'True'
                             })
                 success = True
-                break  # Success! Break out of the retry loop.
+                break
                     
             except Exception as e:
                 tqdm.write(f"⚠️ API Error on attempt {attempt+1}: {e}")
                 time.sleep(SLEEP_FAIL)
 
-        # Apply your exact sleep logic
         if success:
             time.sleep(SLEEP_SUCCESS)
         else:
@@ -141,7 +158,6 @@ def main():
 
     upload_master_to_gcs()
 
-    # Clean up local raw dump
     if os.path.exists(RAW_DUMP_FILENAME): 
         os.remove(RAW_DUMP_FILENAME)
         
