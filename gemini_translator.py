@@ -10,6 +10,9 @@ load_dotenv()
 PROJECT_ID = os.getenv("PROJECT_ID")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
+
+if not PROJECT_ID or not os.getenv("GEMINI_API_KEY"):
+    raise ValueError("Required env vars PROJECT_ID and GEMINI_API_KEY must be set")
 BATCH_SIZE = 5 
 # Start time to monitor for Cloud Run 600s/3600s limits
 START_TIME = time.time()

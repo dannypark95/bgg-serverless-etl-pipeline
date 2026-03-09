@@ -5,7 +5,7 @@ main:
           - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
           - location: "us-central1"
           - bucket_name: "boardgame-catalog-app.firebasestorage.app"
-          - curr_date: ${text.split(sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID"), "-")[0]} # Simplified date logic or use a dedicated variable
+          - curr_date: ${text.split(time.format(sys.now()), "T")[0]}
           - iteration: 0
           - max_iterations: 5
 

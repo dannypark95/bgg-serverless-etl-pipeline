@@ -13,7 +13,9 @@ load_dotenv()
 # --- CONFIGURATION ---
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
-MY_BGG_TOKEN = os.getenv("BGG_TOKEN") 
+
+if not PROJECT_ID or not BUCKET_NAME:
+    raise ValueError("Required env vars PROJECT_ID and BUCKET_NAME must be set")
 
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 

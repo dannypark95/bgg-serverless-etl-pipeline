@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Copy the requirements first (optimizes Docker's build cache)
-# Ensure your requirements.txt now includes: google-generativeai, pandas, google-cloud-storage, google-cloud-firestore
+# Dependencies: google-generativeai, google-cloud-storage, google-cloud-firestore, tqdm
 COPY requirements.txt .
 
 # Install the Python dependencies
