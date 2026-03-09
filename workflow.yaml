@@ -5,6 +5,7 @@ main:
           - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
           - location: "us-central1"
 
+    # Step 1: Pre-process CSV and apply 73-rating threshold
     - run_bgg_csv_job:
         call: run_job_and_wait
         args:
@@ -13,6 +14,7 @@ main:
           location: ${location}
         result: csv_job_result
 
+    # Step 2: Sync metadata from BGG and initialize localized maps
     - run_bgg_extractor_job:
         call: run_job_and_wait
         args:
@@ -21,18 +23,19 @@ main:
           location: ${location}
         result: extractor_job_result
 
-    - run_boardlife_scraper_job:
+    # Step 3: Run Gemini AI for multi-language translations
+    - run_gemini_translator_job:
         call: run_job_and_wait
         args:
-          job_name: "boardlife-scraper-job"
+          job_name: "gemini-translator-job"
           project_id: ${project_id}
           location: ${location}
-        result: scraper_job_result
+        result: translator_job_result
 
     - finish:
-        return: "Full Pipeline Succeeded!"
+        return: "BGG Localization Pipeline Succeeded!"
 
-# --- Reusable Sub-workflow ---
+# --- Reusable Sub-workflow to handle Cloud Run Job Execution ---
 run_job_and_wait:
   params: [job_name, project_id, location]
   steps:
