@@ -4,7 +4,6 @@ import csv
 import os
 import time
 from google.cloud import storage
-from google.cloud.exceptions import NotFound
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -22,33 +21,12 @@ if not PROJECT_ID or not BUCKET_NAME:
 CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
-CHECKPOINT_FILE = "csv_progress.txt"
-
 # Cloud Run writable temporary directory
 LOCAL_RAW_PATH = os.path.join("/tmp", RAW_DUMP_FILENAME)
 LOCAL_MASTER_PATH = os.path.join("/tmp", "temp_master.csv")
 
-# Optimization: Save checkpoint every 50k rows to avoid GCS 429 errors
-CHECKPOINT_INTERVAL = 50000 
-
 storage_client = storage.Client(project=PROJECT_ID)
 bucket = storage_client.bucket(BUCKET_NAME)
-
-def get_checkpoint():
-    try:
-        blob = bucket.blob(CHECKPOINT_FILE)
-        if blob.exists():
-            return int(blob.download_as_text())
-    except Exception:
-        pass
-    return 0
-
-def save_checkpoint(index):
-    try:
-        # Saving to Cloud Storage
-        bucket.blob(CHECKPOINT_FILE).upload_from_string(str(index))
-    except Exception as e:
-        print(f"⚠️ Checkpoint upload failed (likely rate limit): {e}")
 
 def download_raw_from_gcs():
     print(f"📥 Downloading {RAW_DUMP_FILENAME} to {LOCAL_RAW_PATH}...")
@@ -64,17 +42,12 @@ def main():
     if not download_raw_from_gcs():
         return
 
-    start_row = get_checkpoint()
     base_games = []
-    
-    print(f"🚀 Processing CSV from row: {start_row}")
+    print("🚀 Processing CSV...")
     
     with open(LOCAL_RAW_PATH, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader):
-            if i < start_row:
-                continue
-            
             # Filter Logic: Keep ranked base games, skip expansions/unranked
             if row.get('is_expansion') == '1' or not row.get('rank') or row.get('rank') == '0':
                 continue
@@ -86,11 +59,6 @@ def main():
                 'is_expansion': 'False'
             })
 
-            # Save progress at intervals to survive crashes
-            if i > 0 and i % CHECKPOINT_INTERVAL == 0:
-                save_checkpoint(i)
-                print(f"✅ Checkpoint at row {i}")
-
     # Write results to the absolute /tmp path
     print(f"✍️ Writing filtered data to {LOCAL_MASTER_PATH}...")
     with open(LOCAL_MASTER_PATH, mode='w', newline='', encoding='utf-8') as f:
@@ -98,15 +66,21 @@ def main():
         writer.writeheader()
         writer.writerows(base_games)
 
-    # Upload final file to GCS
+    # Upload final file to GCS (with retry for 429 rate limit)
     if os.path.exists(LOCAL_MASTER_PATH):
         print(f"📤 Uploading {MASTER_LIST_FILENAME} to Cloud Storage...")
-        bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(LOCAL_MASTER_PATH)
-        # Clear checkpoint on total success (may not exist on first run)
-        try:
-            bucket.blob(CHECKPOINT_FILE).delete()
-        except NotFound:
-            pass
+        blob = bucket.blob(MASTER_LIST_FILENAME)
+        for attempt in range(3):
+            try:
+                blob.upload_from_filename(LOCAL_MASTER_PATH)
+                break
+            except Exception as e:
+                if ("429" in str(e) or "rate limit" in str(e).lower()) and attempt < 2:
+                    wait = 30 * (attempt + 1)
+                    print(f"⚠️ Rate limited, retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
         print("🎉 CSV Filtering complete.")
     else:
         print("❌ Error: Temp file was not created.")

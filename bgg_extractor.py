@@ -28,8 +28,8 @@ CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
 
 CHUNK_SIZE = 20 
-SLEEP_SUCCESS = 2.5
-SLEEP_FAIL = 10
+SLEEP_SUCCESS = 5  # BGG recommends 5s between requests
+SLEEP_FAIL = 60   # Longer backoff on 401/rate limit
 
 # Supported languages for localized maps
 LANGUAGES = ["en", "ko", "de", "es", "fr", "ja", "ru", "zh"]
@@ -146,10 +146,17 @@ def main():
         chunk_dict = {game['bgg_id']: game for game in chunk}
         url = f"https://boardgamegeek.com/xmlapi2/thing?id={','.join(bgg_ids)}&stats=1"
         
+        headers = {
+            'User-Agent': 'BoardGameCatalog/1.0 (https://boardgamegeek.com/applications)',
+        }
+        bgg_token = os.getenv("BGG_TOKEN")
+        if bgg_token:
+            headers['Authorization'] = f'Bearer {bgg_token}'
+        
         success = False
         for attempt in range(3):
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req) as response:
                     root = ET.fromstring(response.read())
                 
