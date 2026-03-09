@@ -7,6 +7,7 @@ substitutions:
   _BUCKET_NAME: "boardgame-catalog-app.firebasestorage.app"
   _COLLECTION: "boardgames"
   _REGION: "us-central1"
+  _SA: "471895724686-compute@developer.gserviceaccount.com"
 
 steps:
   # Step 1: Build the Docker image
@@ -80,17 +81,15 @@ steps:
       - '--set-secrets'
       - 'GEMINI_API_KEY=GEMINI_API_KEY:latest'
 
-  # Step 6: Deploy the Workflow
+  # Step 6: Deploy the Workflow (Corrected syntax for location)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'workflows'
       - 'deploy'
       - 'bgg-main-pipeline'
-      - '--source'
-      - 'workflow.yaml'
-      - '--region'
-      - '${_REGION}'
+      - '--source=workflow.yaml'
+      - '--location=${_REGION}'
 
   # Step 7: Create or Update the Weekly Schedule
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -100,18 +99,17 @@ steps:
       - |
         gcloud scheduler jobs create http bgg-weekly-sync \
           --schedule="0 3 * * 0" \
-          --uri="https://workflowexecutions.googleapis.com/v1/projects/${PROJECT_ID}/locations/us-central1/workflows/bgg-main-pipeline/executions" \
+          --uri="https://workflowexecutions.googleapis.com/v1/projects/${PROJECT_ID}/locations/${_REGION}/workflows/bgg-main-pipeline/executions" \
           --message-body="{}" \
           --time-zone="Asia/Seoul" \
-          --location="us-central1" \
-          --oauth-service-account-email="471895724686-compute@developer.gserviceaccount.com" \
+          --location="${_REGION}" \
+          --oauth-service-account-email="${_SA}" \
           || gcloud scheduler jobs update http bgg-weekly-sync \
           --schedule="0 3 * * 0" \
-          --uri="https://workflowexecutions.googleapis.com/v1/projects/${PROJECT_ID}/locations/us-central1/workflows/bgg-main-pipeline/executions" \
-          --message-body="{}" \
+          --uri="https://workflowexecutions.googleapis.com/v1/projects/${PROJECT_ID}/locations/${_REGION}/workflows/bgg-main-pipeline/executions" \
           --time-zone="Asia/Seoul" \
-          --location="us-central1" \
-          --oauth-service-account-email="471895724686-compute@developer.gserviceaccount.com"
+          --location="${_REGION}" \
+          --oauth-service-account-email="${_SA}"
 
 images:
   - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
