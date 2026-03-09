@@ -16,7 +16,7 @@ load_dotenv()
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
 # It looks for the token in your .env, but falls back to your hardcoded one
-MY_BGG_TOKEN = os.getenv("BGG_TOKEN", "24b17ef8-b80d-4df1-9f4f-c6a503fbdeeb") 
+MY_BGG_TOKEN = os.getenv("BGG_TOKEN") 
 
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
