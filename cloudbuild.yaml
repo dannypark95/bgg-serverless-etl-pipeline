@@ -81,7 +81,15 @@ steps:
       - '--set-secrets'
       - 'GEMINI_API_KEY=GEMINI_API_KEY:latest'
 
-  # Step 6: Deploy the Workflow (Corrected syntax for location)
+  # Step 6: Ensure Workflows Service Identity exists
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud beta services identity create --service=workflows.googleapis.com || echo "Service identity already exists."
+
+  # Step 7: Deploy the Workflow
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -91,7 +99,7 @@ steps:
       - '--source=workflow.yaml'
       - '--location=${_REGION}'
 
-  # Step 7: Create or Update the Weekly Schedule
+  # Step 8: Create or Update the Weekly Schedule
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
