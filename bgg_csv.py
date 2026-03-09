@@ -1,167 +1,69 @@
-import urllib.request
-import urllib.parse
-import xml.etree.ElementTree as ET
-import csv
+import pandas as pd
 import os
-import time
-from tqdm import tqdm
 from google.cloud import storage
-from dotenv import load_dotenv
 from datetime import datetime
 
-# Load environment variables
-load_dotenv()
-
-# --- CONFIGURATION ---
+# --- CONFIG ---
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
-
-# Specifically fetch from environment variables injected by Secret Manager
-MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
-
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
-RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
+RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv"
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
-
-# Matching your successful script exactly
-CHUNK_SIZE = 20 
-SLEEP_SUCCESS = 4
-SLEEP_FAIL = 10
+CHECKPOINT_FILE = "csv_progress.txt"
+RATING_THRESHOLD = 73
 
 storage_client = storage.Client(project=PROJECT_ID)
+bucket = storage_client.bucket(BUCKET_NAME)
 
-def download_raw_from_gcs():
-    print(f"📥 Downloading raw dump {RAW_DUMP_FILENAME} from Firebase...")
+def get_checkpoint():
     try:
-        bucket = storage_client.bucket(BUCKET_NAME)
-        blob = bucket.blob(RAW_DUMP_FILENAME)
-        blob.download_to_filename(RAW_DUMP_FILENAME)
-        return True
-    except Exception as e:
-        print(f"❌ Could not download {RAW_DUMP_FILENAME}. Error: {e}")
-        return False
+        blob = bucket.blob(CHECKPOINT_FILE)
+        return int(blob.download_as_text())
+    except:
+        return 0
 
-def extract_base_games():
-    base_games_list = []
-    print("📊 Extracting base games (Ranked + Unranked with 73+ ratings)...")
+def save_checkpoint(row_index):
+    bucket.blob(CHECKPOINT_FILE).upload_from_string(str(row_index))
+
+def extract_logic():
+    start_row = get_checkpoint()
+    print(f"🚀 Processing CSV from row: {start_row}")
+
+    # Ensure the master list exists (append mode)
+    local_master = "temp_master.csv"
+    mode = 'a' if start_row > 0 else 'w'
+    header = True if start_row == 0 else False
+
+    # Download raw file locally (assuming it's in GCS)
+    if not os.path.exists(RAW_DUMP_FILENAME):
+        bucket.blob(RAW_DUMP_FILENAME).download_to_filename(RAW_DUMP_FILENAME)
+
+    chunk_size = 20000
+    current_row = 0
     
-    # NEW: Statistical threshold to include high-quality unranked games
-    RATING_THRESHOLD = 73 
-    
-    with open(RAW_DUMP_FILENAME, mode='r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            # 1. Skip games that are explicitly marked as expansions
-            if row.get('is_expansion') == '1':
-                continue
+    # Process in chunks to stay under memory and time limits
+    for chunk in pd.read_csv(RAW_DUMP_FILENAME, chunksize=chunk_size):
+        current_row += len(chunk)
+        if current_row <= start_row:
+            continue
             
-            # 2. Extract numeric values safely
-            try:
-                rank = int(row.get('rank', 0))
-                usersrated = int(row.get('usersrated', 0))
-            except (ValueError, TypeError):
-                rank = 0
-                usersrated = 0
-            
-            # 3. Logic: Include if it is ranked OR if it's unranked but popular
-            is_ranked = rank > 0
-            is_popular_unranked = (rank == 0 and usersrated >= RATING_THRESHOLD)
-
-            if is_ranked or is_popular_unranked:
-                if row.get('id') and row.get('name'):
-                    base_games_list.append({'id': row.get('id'), 'name': row.get('name')})
-                    
-    print(f"✅ Extracted {len(base_games_list)} base games (added {len(base_games_list) - 30238} unranked games).")
-    return base_games_list
-
-def fetch_expansions_sync(base_games_list):
-    expansions = []
-    chunks = [base_games_list[i:i + CHUNK_SIZE] for i in range(0, len(base_games_list), CHUNK_SIZE)]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0', 
-        'Authorization': f'Bearer {MY_BGG_TOKEN}'
-    }
-
-    print(f"\n🔍 Querying API for expansions across {len(base_games_list)} base games...")
-    
-    for chunk in tqdm(chunks, desc="Finding Expansions"):
-        base_ids = [game['id'] for game in chunk]
+        # 73-rating threshold + Base Games only
+        mask = (chunk['is_expansion'] == 0) & ((chunk['rank'] > 0) | (chunk['usersrated'] >= RATING_THRESHOLD))
+        filtered = chunk[mask][['id', 'name']].copy()
+        filtered.columns = ['bgg_id', 'name']
         
-        params = {"id": ",".join(base_ids)}
-        url = f"https://boardgamegeek.com/xmlapi2/thing?{urllib.parse.urlencode(params)}"
+        # Save chunk
+        filtered.to_csv(local_master, mode=mode, header=header, index=False)
+        mode = 'a'
+        header = False
         
-        success = False
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req) as response:
-                    xml_data = response.read()
-                    
-                try:
-                    root = ET.fromstring(xml_data)
-                except ET.ParseError:
-                    tqdm.write(f"⚠️ XML Parse Error on chunk starting with ID {base_ids[0]}")
-                    break
+        # Checkpoint every chunk
+        save_checkpoint(current_row)
+        print(f"✅ Checkpoint at row {current_row}")
 
-                for item in root.findall('item'):
-                    parent_id = item.get('id')
-                    parent_name = next((g['name'] for g in chunk if g['id'] == parent_id), "Unknown")
-                    
-                    for link in item.findall("link[@type='boardgameexpansion']"):
-                        if link.get('inbound') != 'true':
-                            expansions.append({
-                                'bgg_id': link.get('id'),
-                                'parent_id': parent_id,
-                                'parent_name': parent_name,
-                                'is_expansion': 'True'
-                            })
-                success = True
-                break
-                    
-            except Exception as e:
-                tqdm.write(f"⚠️ API Error on attempt {attempt+1}: {e}")
-                time.sleep(SLEEP_FAIL)
-
-        if success:
-            time.sleep(SLEEP_SUCCESS)
-        else:
-            tqdm.write(f"❌ Failed to process chunk starting with ID {base_ids[0]}. Skipping.")
-
-    return expansions
-
-def upload_master_to_gcs():
-    print(f"\n☁️ Uploading {MASTER_LIST_FILENAME} to Firebase Storage...")
-    try:
-        bucket = storage_client.bucket(BUCKET_NAME)
-        blob = bucket.blob(MASTER_LIST_FILENAME)
-        blob.upload_from_filename(MASTER_LIST_FILENAME)
-        print("✅ Master List successfully uploaded!")
-    except Exception as e:
-        print(f"❌ Error uploading: {e}")
-
-def main():
-    if not download_raw_from_gcs(): 
-        return
-        
-    base_games_list = extract_base_games()
-    all_expansions = fetch_expansions_sync(base_games_list)
-
-    print(f"\n💾 Saving Master List ({len(base_games_list)} Bases, {len(all_expansions)} Expansions)...")
-    with open(MASTER_LIST_FILENAME, mode='w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['bgg_id', 'parent_id', 'parent_name', 'is_expansion'])
-        for bg in base_games_list: 
-            writer.writerow([bg['id'], '', '', 'False'])
-        for exp in all_expansions: 
-            writer.writerow([exp['bgg_id'], exp['parent_id'], exp['parent_name'], exp['is_expansion']])
-
-    upload_master_to_gcs()
-
-    if os.path.exists(RAW_DUMP_FILENAME): 
-        os.remove(RAW_DUMP_FILENAME)
-        
-    print(f"\n📁 Local copy successfully saved as: {MASTER_LIST_FILENAME}")
+    # Upload final result
+    bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(local_master)
+    print("🎉 CSV Filtering complete.")
 
 if __name__ == "__main__":
-    main()
+    extract_logic()

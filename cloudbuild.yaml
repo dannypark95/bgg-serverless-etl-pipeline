@@ -1,7 +1,6 @@
 options:
   logging: CLOUD_LOGGING_ONLY
 
-# --- GLOBAL VARIABLES ---
 substitutions:
   _PROJECT_ID: "boardgame-catalog-app"
   _BUCKET_NAME: "boardgame-catalog-app.firebasestorage.app"
@@ -10,21 +9,13 @@ substitutions:
   _SA: "471895724686-compute@developer.gserviceaccount.com"
 
 steps:
-  # Step 1: Build the Docker image
+  # Step 1 & 2: Build and Push Docker Image
   - name: 'gcr.io/cloud-builders/docker'
-    args: 
-      - 'build'
-      - '-t'
-      - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
-      - '.'
-
-  # Step 2: Push the image
+    args: ['build', '-t', 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest', '.']
   - name: 'gcr.io/cloud-builders/docker'
-    args: 
-      - 'push'
-      - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
+    args: ['push', 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest']
 
-  # Step 3: Deploy Job (CSV Ranking)
+  # Step 3: Deploy CSV Job (Increased timeout to 20 mins)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -32,18 +23,14 @@ steps:
       - 'jobs'
       - 'deploy'
       - 'bgg-csv-job'
-      - '--image'
-      - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
-      - '--command'
-      - 'python,bgg_csv.py'
-      - '--region'
-      - '${_REGION}'
-      - '--set-env-vars'
-      - 'PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}'
-      - '--set-secrets'
-      - 'BGG_TOKEN=BGG_TOKEN:latest'
+      - '--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
+      - '--command=python,bgg_csv.py'
+      - '--region=${_REGION}'
+      - '--task-timeout=1200s'
+      - '--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}'
+      - '--set-secrets=BGG_TOKEN=BGG_TOKEN:latest'
 
-  # Step 4: Deploy Job (The Main Extractor)
+  # Step 4: Deploy Extractor Job (Increased timeout to 1 hour)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -51,18 +38,15 @@ steps:
       - 'jobs'
       - 'deploy'
       - 'bgg-extractor-job'
-      - '--image'
-      - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
-      - '--command'
-      - 'python,bgg_extractor.py'
-      - '--region'
-      - '${_REGION}'
-      - '--set-env-vars'
-      - 'PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}'
-      - '--set-secrets'
-      - 'BGG_TOKEN=BGG_TOKEN:latest'
+      - '--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
+      - '--command=python,bgg_extractor.py'
+      - '--region=${_REGION}'
+      - '--task-timeout=3600s'
+      - '--max-retries=3'
+      - '--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}'
+      - '--set-secrets=BGG_TOKEN=BGG_TOKEN:latest'
 
-  # Step 5: Deploy Job (The Gemini Translator)
+  # Step 5: Deploy Translator Job (Increased timeout to 1 hour)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -70,36 +54,29 @@ steps:
       - 'jobs'
       - 'deploy'
       - 'gemini-translator-job'
-      - '--image'
-      - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
-      - '--command'
-      - 'python,gemini_translator.py'
-      - '--region'
-      - '${_REGION}'
-      - '--set-env-vars'
-      - 'PROJECT_ID=${_PROJECT_ID},COLLECTION_NAME=${_COLLECTION}'
-      - '--set-secrets'
-      - 'GEMINI_API_KEY=GEMINI_API_KEY:latest'
+      - '--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
+      - '--command=python,gemini_translator.py'
+      - '--region=${_REGION}'
+      - '--task-timeout=3600s'
+      - '--max-retries=2'
+      - '--set-env-vars=PROJECT_ID=${_PROJECT_ID},COLLECTION_NAME=${_COLLECTION}'
+      - '--set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest'
 
-  # Step 6: Ensure Workflows Service Identity exists
+  # Step 6: Prerequisites (Identity and API enablement)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud beta services identity create --service=workflows.googleapis.com || echo "Service identity already exists."
+        gcloud beta services identity create --service=workflows.googleapis.com || echo "Identity exists"
+        gcloud services enable cloudscheduler.googleapis.com || echo "API enabled"
 
-  # Step 7: Deploy the Workflow
+  # Step 7: Deploy Workflow
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
-    args:
-      - 'workflows'
-      - 'deploy'
-      - 'bgg-main-pipeline'
-      - '--source=workflow.yaml'
-      - '--location=${_REGION}'
+    args: ['workflows', 'deploy', 'bgg-main-pipeline', '--source=workflow.yaml', '--location=${_REGION}']
 
-  # Step 8: Create or Update the Weekly Schedule
+  # Step 8: Deploy Schedule
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
@@ -119,5 +96,4 @@ steps:
           --location="${_REGION}" \
           --oauth-service-account-email="${_SA}"
 
-images:
-  - 'gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest'
+images: ['gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest']

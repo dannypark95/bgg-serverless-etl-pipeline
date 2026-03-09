@@ -4,38 +4,41 @@ main:
         assign:
           - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
           - location: "us-central1"
+          - iteration: 0
+          - max_iterations: 5  # Total of 5 hours potential translation time
 
-    # Step 1: Pre-process CSV and apply 73-rating threshold
     - run_bgg_csv_job:
         call: run_job_and_wait
         args:
           job_name: "bgg-csv-job"
           project_id: ${project_id}
           location: ${location}
-        result: csv_job_result
 
-    # Step 2: Sync metadata from BGG and initialize localized maps
     - run_bgg_extractor_job:
         call: run_job_and_wait
         args:
           job_name: "bgg-extractor-job"
           project_id: ${project_id}
           location: ${location}
-        result: extractor_job_result
 
-    # Step 3: Run Gemini AI for multi-language translations
-    - run_gemini_translator_job:
-        call: run_job_and_wait
-        args:
-          job_name: "gemini-translator-job"
-          project_id: ${project_id}
-          location: ${location}
-        result: translator_job_result
+    # Loop the translator to handle massive datasets incrementally
+    - translation_loop:
+        if: ${iteration < max_iterations}
+        steps:
+          - run_translator:
+              call: run_job_and_wait
+              args:
+                job_name: "gemini-translator-job"
+                project_id: ${project_id}
+                location: ${location}
+          - next_iteration:
+              assign:
+                - iteration: ${iteration + 1}
+              next: translation_loop
 
     - finish:
-        return: "BGG Localization Pipeline Succeeded!"
+        return: "Full Pipeline (with iterative translation) Succeeded!"
 
-# --- Reusable Sub-workflow to handle Cloud Run Job Execution ---
 run_job_and_wait:
   params: [job_name, project_id, location]
   steps:
@@ -45,14 +48,12 @@ run_job_and_wait:
           name: ${"namespaces/" + project_id + "/jobs/" + job_name}
           location: ${location}
         result: execution
-    
     - wait_for_completion:
         call: googleapis.run.v1.namespaces.executions.get
         args:
           name: ${execution.metadata.name}
           location: ${location}
         result: status
-    
     - check_condition:
         switch:
           - condition: ${status.status.conditions[0].status == "Unknown"}
@@ -60,12 +61,10 @@ run_job_and_wait:
           - condition: ${status.status.conditions[0].status == "False"}
             raise: ${"Job " + job_name + " failed!"}
         next: job_succeeded
-
     - sleep_and_repeat:
         call: sys.sleep
         args:
           seconds: 30
         next: wait_for_completion
-
     - job_succeeded:
         return: ${status}

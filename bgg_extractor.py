@@ -21,6 +21,7 @@ BUCKET_NAME = os.getenv("BUCKET_NAME")
 MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
+PROGRESS_FILE = "extractor_progress.txt"
 
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
@@ -29,17 +30,18 @@ CHUNK_SIZE = 20
 SLEEP_SUCCESS = 2.5
 SLEEP_FAIL = 10
 
-# Supported languages for our dictionary structure
+# Supported languages for localized maps
 LANGUAGES = ["en", "ko", "de", "es", "fr", "ja", "ru", "zh"]
 
 storage_client = storage.Client(project=PROJECT_ID)
 db = firestore.Client(project=PROJECT_ID)
+bucket = storage_client.bucket(BUCKET_NAME)
+
+# --- HELPER FUNCTIONS ---
 
 def download_files_from_gcs():
-    """Syncs the master list and cache DB from Cloud Storage for stateless environments."""
+    """Syncs the master list and cache DB from GCS for stateless environments."""
     print("📥 Syncing files from Google Cloud Storage...")
-    bucket = storage_client.bucket(BUCKET_NAME)
-    
     try:
         blob = bucket.blob(MASTER_LIST_FILENAME)
         blob.download_to_filename(MASTER_LIST_FILENAME)
@@ -55,19 +57,32 @@ def download_files_from_gcs():
             print(f"  ✅ Downloaded existing cache database: {CACHE_DB}")
     except Exception as e:
         print(f"⚠️ No cache found or error downloading: {e}")
-        
     return True
 
 def upload_cache_to_gcs():
     """Saves the SQLite cache back to GCS."""
     print(f"\n☁️ Uploading updated {CACHE_DB} to Firebase Storage...")
     try:
-        bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(CACHE_DB)
         blob.upload_from_filename(CACHE_DB)
         print("✅ Cache DB successfully secured in the cloud!")
     except Exception as e:
         print(f"❌ Error uploading cache: {e}")
+
+def get_progress():
+    """Reads the last successful chunk index from GCS."""
+    try:
+        blob = bucket.blob(PROGRESS_FILE)
+        return int(blob.download_as_text())
+    except:
+        return 0
+
+def save_progress(idx):
+    """Saves the current chunk index to GCS."""
+    try:
+        bucket.blob(PROGRESS_FILE).upload_from_string(str(idx))
+    except Exception as e:
+        print(f"⚠️ Failed to save progress: {e}")
 
 def init_cache():
     conn = sqlite3.connect(CACHE_DB)
@@ -96,6 +111,8 @@ def generate_localized_dict(content, default_lang="en"):
     ldict[default_lang] = content if content else ""
     return ldict
 
+# --- MAIN EXECUTION ---
+
 def main():
     if not download_files_from_gcs():
         return
@@ -103,23 +120,29 @@ def main():
     conn = init_cache()
     c = conn.cursor()
 
-    # Read the master list (filtered by our 73-rating logic)
-    games_to_process = []
+    # Read the master list (populated by bgg_csv.py)
+    games = []
     with open(MASTER_LIST_FILENAME, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            games_to_process.append(row)
+        games = list(reader)
 
-    chunks = [games_to_process[i:i + CHUNK_SIZE] for i in range(0, len(games_to_process), CHUNK_SIZE)]
-    print(f"\n📊 Processing {len(games_to_process)} games in {len(chunks)} chunks...")
+    # Calculate chunks and find where we left off
+    start_chunk_idx = get_progress()
+    chunks = [games[i:i + CHUNK_SIZE] for i in range(0, len(games), CHUNK_SIZE)]
+    
+    print(f"🔄 Resuming from chunk {start_chunk_idx} of {len(chunks)}")
 
     batch = db.batch()
     batch_count = 0
     updates_made = 0
     skipped_count = 0
 
-    for chunk in tqdm(chunks, desc="Syncing with Firestore"):
+    for i, chunk in enumerate(tqdm(chunks, desc="Syncing")):
+        if i < start_chunk_idx:
+            continue
+            
         bgg_ids = [game['bgg_id'] for game in chunk]
+        chunk_dict = {game['bgg_id']: game for game in chunk}
         url = f"https://boardgamegeek.com/xmlapi2/thing?id={','.join(bgg_ids)}&stats=1"
         
         success = False
@@ -131,31 +154,34 @@ def main():
                 
                 for item in root.findall('item'):
                     bgg_id = item.get('id')
+                    csv_row = chunk_dict.get(bgg_id, {})
                     
-                    # Core Data Extraction
+                    # Extract Data
                     title_en = item.find("name[@type='primary']").get('value') if item.find("name[@type='primary']") is not None else "Unknown"
                     desc_en = item.find('description').text if item.find('description') is not None else ""
+                    summary_en = desc_en[:250] + "..." if len(desc_en) > 250 else desc_en
                     
                     stats = item.find('statistics/ratings')
                     rating = round(float(stats.find('average').get('value')), 2) if stats is not None else 0.0
                     weight = round(float(stats.find('averageweight').get('value')), 2) if stats is not None else 0.0
 
-                    # NEW: Build Localized Map Structure
+                    # NEW: Localized Map Structure
                     doc_data = {
                         "bgg_id": bgg_id,
                         "title": generate_localized_dict(title_en),
                         "description": generate_localized_dict(desc_en),
-                        "summary_description": generate_localized_dict(desc_en[:250] + "..." if len(desc_en) > 250 else desc_en),
+                        "summary_description": generate_localized_dict(summary_en),
                         "year_published": int(item.find('yearpublished').get('value')) if item.find('yearpublished') is not None else 0,
                         "min_players": int(item.find('minplayers').get('value')) if item.find('minplayers') is not None else 0,
                         "max_players": int(item.find('maxplayers').get('value')) if item.find('maxplayers') is not None else 0,
                         "rating": rating,
                         "weight": weight,
                         "image_url": item.find('thumbnail').text if item.find('thumbnail') is not None else "",
+                        "is_expansion": csv_row.get('is_expansion') == 'True',
                         "updated_at": firestore.SERVER_TIMESTAMP
                     }
 
-                    # Use MD5 Hash to prevent redundant Firestore writes
+                    # Hash Check
                     current_hash = generate_hash(doc_data)
                     if current_hash != get_cached_hash(c, bgg_id):
                         doc_ref = db.collection(COLLECTION_NAME).document(bgg_id)
@@ -167,6 +193,7 @@ def main():
                         if batch_count >= 400:
                             batch.commit()
                             conn.commit()
+                            save_progress(i) # Checkpoint
                             batch = db.batch()
                             batch_count = 0
                     else:
@@ -175,19 +202,21 @@ def main():
                 success = True
                 break
             except Exception as e:
-                tqdm.write(f"⚠️ Error: {e}. Retrying...")
+                tqdm.write(f"⚠️ Attempt {attempt+1} failed: {e}")
                 time.sleep(SLEEP_FAIL)
 
         if success:
             time.sleep(SLEEP_SUCCESS)
 
+    # Final commit
     if batch_count > 0:
         batch.commit()
         conn.commit()
+        save_progress(len(chunks)) # Mark as 100% complete
 
     conn.close()
     upload_cache_to_gcs()
-    print(f"\n✅ Done! Updated: {updates_made}, Cached: {skipped_count}")
+    print(f"\n✅ Extractor Finished. Updated: {updates_made}, Skipped: {skipped_count}")
 
 if __name__ == "__main__":
     main()
