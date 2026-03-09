@@ -31,6 +31,8 @@ steps:
       - 'us-central1'
       - '--set-env-vars'
       - 'PROJECT_ID=boardgame-catalog-app,BUCKET_NAME=boardgame-catalog-app.firebasestorage.app,COLLECTION_NAME=boardgames'
+      - '--set-secrets'
+      - 'BGG_TOKEN=BGG_TOKEN:latest'
 
   # Step 4: Deploy Job 2 (The Main Extractor)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -48,6 +50,8 @@ steps:
       - 'us-central1'
       - '--set-env-vars'
       - 'PROJECT_ID=boardgame-catalog-app,BUCKET_NAME=boardgame-catalog-app.firebasestorage.app,COLLECTION_NAME=boardgames'
+      - '--set-secrets'
+      - 'BGG_TOKEN=BGG_TOKEN:latest'
 
   # Step 5: Deploy Job 3 (The BoardLife Scraper)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'

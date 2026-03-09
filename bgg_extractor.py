@@ -17,6 +17,7 @@ load_dotenv()
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
+MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
 
@@ -124,6 +125,11 @@ def main():
         
         url = f"https://boardgamegeek.com/xmlapi2/thing?id={','.join(bgg_ids)}&stats=1"
         
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Authorization': f'Bearer {MY_BGG_TOKEN}'
+        }
+
         success = False
         for attempt in range(3):
             try:

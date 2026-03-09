@@ -15,8 +15,9 @@ load_dotenv()
 # --- CONFIGURATION ---
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
-# It looks for the token in your .env, but falls back to your hardcoded one
-MY_BGG_TOKEN = os.getenv("BGG_TOKEN") 
+
+# Specifically fetch from environment variables injected by Secret Manager
+MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
 
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
