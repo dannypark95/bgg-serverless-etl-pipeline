@@ -1,0 +1,38 @@
+main:
+  steps:
+    - init:
+        assign:
+          # This dynamically grabs the project ID it is deployed in
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - location: "us-central1"
+          
+    - run_bgg_csv_job:
+        # Step 1: Run the Pre-Processor
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + project_id + "/jobs/bgg-csv-job"}
+          location: ${location}
+        result: csv_job_result
+
+    - run_bgg_extractor_job:
+        # Step 2: Run the Main Extractor
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + project_id + "/jobs/bgg-extractor-job"}
+          location: ${location}
+        result: extractor_job_result
+
+    - run_boardlife_scraper_job:
+        # Step 3: Run the Korean Localization Scraper
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + project_id + "/jobs/boardlife-scraper-job"}
+          location: ${location}
+        result: scraper_job_result
+
+    - finish:
+        return: 
+            message: "ETL Pipeline completed successfully!"
+            csv_status: ${csv_job_result}
+            extractor_status: ${extractor_job_result}
+            scraper_status: ${scraper_job_result}
