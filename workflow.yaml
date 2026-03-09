@@ -17,16 +17,16 @@ main:
             auth:
               type: OAuth2
           result: file_check
-          next: run_bgg_extractor_job # If file exists, skip Step 1
-        retry:
-          attempts: 1
         except:
           as: e
           steps:
-            - log_missing_file:
-                assign:
-                  - log_msg: "CSV not found for today. Starting CSV Job."
-                next: run_bgg_csv_job # If 404, proceed to run the job
+            - file_not_found:
+                # If 404, we must run the CSV job
+                next: run_bgg_csv_job
+
+    - skip_to_extractor:
+        # If we reached this step, it means 'try' succeeded (file exists)
+        next: run_bgg_extractor_job
 
     - run_bgg_csv_job:
         call: run_job_and_wait
@@ -34,7 +34,6 @@ main:
           job_name: "bgg-csv-job"
           project_id: ${project_id}
           location: ${location}
-
     - run_bgg_extractor_job:
         call: run_job_and_wait
         args:
