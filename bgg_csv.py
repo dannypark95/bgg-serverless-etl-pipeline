@@ -1,16 +1,31 @@
-import pandas as pd
+import urllib.request
+import urllib.parse
+import csv
 import os
+import time
 from google.cloud import storage
+from dotenv import load_dotenv
 from datetime import datetime
 
-# --- CONFIG ---
+# Load environment variables
+load_dotenv()
+
+# --- CONFIGURATION ---
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
+MY_BGG_TOKEN = os.getenv("BGG_TOKEN") 
+
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
-RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv"
+RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
 CHECKPOINT_FILE = "csv_progress.txt"
-RATING_THRESHOLD = 73
+
+# Cloud Run writable temporary directory
+LOCAL_RAW_PATH = os.path.join("/tmp", RAW_DUMP_FILENAME)
+LOCAL_MASTER_PATH = os.path.join("/tmp", "temp_master.csv")
+
+# Optimization: Save checkpoint every 50k rows to avoid GCS 429 errors
+CHECKPOINT_INTERVAL = 50000 
 
 storage_client = storage.Client(project=PROJECT_ID)
 bucket = storage_client.bucket(BUCKET_NAME)
@@ -18,52 +33,76 @@ bucket = storage_client.bucket(BUCKET_NAME)
 def get_checkpoint():
     try:
         blob = bucket.blob(CHECKPOINT_FILE)
-        return int(blob.download_as_text())
-    except:
-        return 0
+        if blob.exists():
+            return int(blob.download_as_text())
+    except Exception:
+        pass
+    return 0
 
-def save_checkpoint(row_index):
-    bucket.blob(CHECKPOINT_FILE).upload_from_string(str(row_index))
+def save_checkpoint(index):
+    try:
+        # Saving to Cloud Storage
+        bucket.blob(CHECKPOINT_FILE).upload_from_string(str(index))
+    except Exception as e:
+        print(f"⚠️ Checkpoint upload failed (likely rate limit): {e}")
 
-def extract_logic():
+def download_raw_from_gcs():
+    print(f"📥 Downloading {RAW_DUMP_FILENAME} to {LOCAL_RAW_PATH}...")
+    try:
+        blob = bucket.blob(RAW_DUMP_FILENAME)
+        blob.download_to_filename(LOCAL_RAW_PATH)
+        return True
+    except Exception as e:
+        print(f"❌ Download failed: {e}")
+        return False
+
+def main():
+    if not download_raw_from_gcs():
+        return
+
     start_row = get_checkpoint()
-    print(f"🚀 Processing CSV from row: {start_row}")
-
-    # Ensure the master list exists (append mode)
-    local_master = "temp_master.csv"
-    mode = 'a' if start_row > 0 else 'w'
-    header = True if start_row == 0 else False
-
-    # Download raw file locally (assuming it's in GCS)
-    if not os.path.exists(RAW_DUMP_FILENAME):
-        bucket.blob(RAW_DUMP_FILENAME).download_to_filename(RAW_DUMP_FILENAME)
-
-    chunk_size = 20000
-    current_row = 0
+    base_games = []
     
-    # Process in chunks to stay under memory and time limits
-    for chunk in pd.read_csv(RAW_DUMP_FILENAME, chunksize=chunk_size):
-        current_row += len(chunk)
-        if current_row <= start_row:
-            continue
+    print(f"🚀 Processing CSV from row: {start_row}")
+    
+    with open(LOCAL_RAW_PATH, mode='r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for i, row in enumerate(reader):
+            if i < start_row:
+                continue
             
-        # 73-rating threshold + Base Games only
-        mask = (chunk['is_expansion'] == 0) & ((chunk['rank'] > 0) | (chunk['usersrated'] >= RATING_THRESHOLD))
-        filtered = chunk[mask][['id', 'name']].copy()
-        filtered.columns = ['bgg_id', 'name']
-        
-        # Save chunk
-        filtered.to_csv(local_master, mode=mode, header=header, index=False)
-        mode = 'a'
-        header = False
-        
-        # Checkpoint every chunk
-        save_checkpoint(current_row)
-        print(f"✅ Checkpoint at row {current_row}")
+            # Filter Logic: Keep ranked base games, skip expansions/unranked
+            if row.get('is_expansion') == '1' or not row.get('rank') or row.get('rank') == '0':
+                continue
+            
+            base_games.append({
+                'bgg_id': row.get('id'),
+                'parent_id': '',
+                'parent_name': '',
+                'is_expansion': 'False'
+            })
 
-    # Upload final result
-    bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(local_master)
-    print("🎉 CSV Filtering complete.")
+            # Save progress at intervals to survive crashes
+            if i > 0 and i % CHECKPOINT_INTERVAL == 0:
+                save_checkpoint(i)
+                print(f"✅ Checkpoint at row {i}")
+
+    # Write results to the absolute /tmp path
+    print(f"✍️ Writing filtered data to {LOCAL_MASTER_PATH}...")
+    with open(LOCAL_MASTER_PATH, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['bgg_id', 'parent_id', 'parent_name', 'is_expansion'])
+        writer.writeheader()
+        writer.writerows(base_games)
+
+    # Upload final file to GCS
+    if os.path.exists(LOCAL_MASTER_PATH):
+        print(f"📤 Uploading {MASTER_LIST_FILENAME} to Cloud Storage...")
+        bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(LOCAL_MASTER_PATH)
+        # Clear checkpoint on total success
+        bucket.blob(CHECKPOINT_FILE).delete()
+        print("🎉 CSV Filtering complete.")
+    else:
+        print("❌ Error: Temp file was not created.")
 
 if __name__ == "__main__":
-    extract_logic()
+    main()
