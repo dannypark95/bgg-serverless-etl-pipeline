@@ -1,63 +1,56 @@
-import pandas as pd
+#!/usr/bin/env python3
+"""
+Test bgg_csv logic locally with a small fixture (10 games).
+Run: python tests/test_bgg_csv.py
+
+Uses: Gloomhaven, Ark Nova, Brass: Birmingham, Pandemic Legacy + 6 less popular games.
+Calls real BGG API to fetch expansion links.
+Loads BGG_TOKEN from .env if present.
+"""
 import os
+import sys
+
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+# Load .env from project root
+_env_path = os.path.join(project_root, ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+import pandas as pd
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
-from google.cloud import storage
-from dotenv import load_dotenv
-from datetime import datetime
 
-load_dotenv()
-
-# --- CONFIG ---
-PROJECT_ID = os.getenv("PROJECT_ID")
-BUCKET_NAME = os.getenv("BUCKET_NAME")
-
-if not PROJECT_ID or not BUCKET_NAME:
-    raise ValueError("Required env vars PROJECT_ID and BUCKET_NAME must be set")
-
-# Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
-CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
-RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv"
-MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
+# --- Test config ---
+TEST_RAW_PATH = os.path.join(
+    os.path.dirname(__file__), "fixtures", "bg_ranks_raw_test.csv"
+)
+TEST_OUTPUT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "tests", "output_master_list.csv"
+)
 RATING_THRESHOLD = 73
-
-# BGG API: max 20 items per request, 5s between requests
 BGG_CHUNK_SIZE = 20
 BGG_SLEEP_SECONDS = 5
 
-# Cloud Run writable directory
-LOCAL_RAW_PATH = os.path.join("/tmp", RAW_DUMP_FILENAME)
-LOCAL_MASTER_PATH = os.path.join("/tmp", "temp_master.csv")
-
-storage_client = storage.Client(project=PROJECT_ID)
-bucket = storage_client.bucket(BUCKET_NAME)
-
-
-def download_raw_from_gcs():
-    """Download raw dump from GCS if not present."""
-    if os.path.exists(LOCAL_RAW_PATH):
-        return True
-    print(f"📥 Downloading {RAW_DUMP_FILENAME} from GCS...")
-    try:
-        bucket.blob(RAW_DUMP_FILENAME).download_to_filename(LOCAL_RAW_PATH)
-        return True
-    except Exception as e:
-        print(f"❌ Download failed: {e}")
-        return False
-
 
 def fetch_expansions_for_base_games(base_games):
-    """
-    Query BGG API for each base game and fetch its expansion links.
-    Returns list of dicts: {bgg_id, name, parent_id, parent_name, is_expansion}
-    """
+    """Query BGG API for expansion links. Same logic as bgg_csv.py."""
     headers = {
         "User-Agent": "BoardGameCatalog/1.0 (https://boardgamegeek.com/applications)",
     }
     bgg_token = os.getenv("BGG_TOKEN")
     if bgg_token:
         headers["Authorization"] = f"Bearer {bgg_token}"
+    else:
+        print("⚠️  No BGG_TOKEN - API may return 401. Set it for full test.")
 
     master_list = []
     base_id_to_name = {str(g["bgg_id"]): g["name"] for g in base_games}
@@ -82,7 +75,6 @@ def fetch_expansions_for_base_games(base_games):
                         else base_id_to_name.get(base_id, "Unknown")
                     )
 
-                    # Add base game
                     master_list.append(
                         {
                             "bgg_id": base_id,
@@ -93,7 +85,6 @@ def fetch_expansions_for_base_games(base_games):
                         }
                     )
 
-                    # Add expansions from links
                     for link in item.findall("link"):
                         if link.get("type") == "boardgameexpansion":
                             exp_id = link.get("id")
@@ -109,7 +100,7 @@ def fetch_expansions_for_base_games(base_games):
                                     }
                                 )
 
-                break  # success
+                break
             except Exception as e:
                 print(f"⚠️ BGG API attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
@@ -119,21 +110,19 @@ def fetch_expansions_for_base_games(base_games):
 
         time.sleep(BGG_SLEEP_SECONDS)
         done = min(i + BGG_CHUNK_SIZE, len(base_games))
-        if done % 100 == 0 or done >= len(base_games):
-            print(f"  ✅ Fetched expansions for {done}/{len(base_games)} base games...")
+        print(f"  ✅ Fetched expansions for {done}/{len(base_games)} base games...")
 
     return master_list
 
 
-def extract_logic():
-    if not download_raw_from_gcs():
-        return
+def run_test():
+    print("=" * 60)
+    print("BGG CSV Test - 10 games (Gloomhaven, Ark Nova, + 8 others)")
+    print("=" * 60)
 
-    print("🚀 Step 1: Filtering base games from CSV...")
+    print("\n🚀 Step 1: Filtering base games from CSV...")
+    df = pd.read_csv(TEST_RAW_PATH)
 
-    df = pd.read_csv(LOCAL_RAW_PATH)
-
-    # Base games only: is_expansion == 0, (rank > 0 OR usersrated >= 73)
     mask = (df["is_expansion"] == 0) & (
         (df["rank"] > 0) | (df["usersrated"] >= RATING_THRESHOLD)
     )
@@ -142,22 +131,34 @@ def extract_logic():
     base_games = base_games.to_dict("records")
 
     print(f"  Found {len(base_games)} base games meeting threshold.")
+    for g in base_games:
+        print(f"    - {g['name']} (id={g['bgg_id']})")
 
-    print("🚀 Step 2: Fetching expansion links from BGG API...")
-    master_list = fetch_expansions_for_base_games(base_games)
+    # Step 2: Fetch expansions (requires BGG_TOKEN for real API)
+    if not os.getenv("BGG_TOKEN"):
+        print("\n⚠️  Skipping Step 2 (BGG API) - no BGG_TOKEN set.")
+        print("   To test expansion fetch: BGG_TOKEN=your_token python tests/test_bgg_csv.py")
+        master_list = [
+            {**g, "parent_id": "", "parent_name": "", "is_expansion": "False"}
+            for g in base_games
+        ]
+        print(f"   Filter-only result: {len(master_list)} base games (no expansions)")
+    else:
+        print("\n🚀 Step 2: Fetching expansion links from BGG API...")
+        master_list = fetch_expansions_for_base_games(base_games)
+        print(f"\n  Master list: {len(master_list)} items (base + expansions)")
 
-    print(f"  Master list: {len(master_list)} items (base + expansions)")
+    # Write output
+    os.makedirs(os.path.dirname(TEST_OUTPUT_PATH), exist_ok=True)
+    pd.DataFrame(master_list).to_csv(TEST_OUTPUT_PATH, index=False)
+    print(f"\n✍️  Output written to: {TEST_OUTPUT_PATH}")
 
-    # Write to temp file
-    filtered_df = pd.DataFrame(master_list)
-    filtered_df.to_csv(LOCAL_MASTER_PATH, index=False)
-    print(f"✍️ Writing to {LOCAL_MASTER_PATH}...")
-
-    # Upload to GCS
-    print(f"📤 Uploading {MASTER_LIST_FILENAME} to Cloud Storage...")
-    bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(LOCAL_MASTER_PATH)
-    print("🎉 CSV Filtering complete.")
+    # Summary
+    base_count = sum(1 for r in master_list if r["is_expansion"] == "False")
+    exp_count = sum(1 for r in master_list if r["is_expansion"] == "True")
+    print(f"\n📊 Summary: {base_count} base games, {exp_count} expansions")
+    print("\n🎉 Test complete.")
 
 
 if __name__ == "__main__":
-    extract_logic()
+    run_test()

@@ -3,3 +3,12 @@ __pycache__/
 *.sqlite
 *.csv
 *.json
+
+# Keep test fixtures
+!tests/fixtures/*.csv
+
+# Test artifacts
+tests/output_master_list.csv
+tests/output_extractor.csv
+tests/output_extractor.json
+tests/output_translations.json

@@ -26,14 +26,16 @@ generation_config = {
 }
 
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     generation_config=generation_config,
     system_instruction=(
-        "You are a board game expert. Translate titles and descriptions. "
+        "You are a board game expert. Translate titles, descriptions, and summaries into all target languages. "
         "Return a JSON object where BGG IDs are the root keys. "
-        "Each game object must contain: 'title' (object with lang keys), "
-        "'description' (full translation), and 'summary' (exactly 2 sentences). "
-        "Language keys must be: ko, de, es, fr, ja, ru, zh."
+        "Each game object must contain three objects, each with lang keys ko, de, es, fr, ja, ru, zh: "
+        "'title' (translated title per language), "
+        "'description' (full translation of the description per language), "
+        "'summary' (exactly 2 sentences per language). "
+        "Every field must be an object with keys: ko, de, es, fr, ja, ru, zh."
     )
 )
 
@@ -64,7 +66,7 @@ def run_optimized_translation():
             batch_input.append({
                 "id": doc.id,
                 "title": d.get('title', {}).get('en', ''),
-                "desc": d.get('description', {}).get('en', '')[:1000] 
+                "desc": d.get('description', {}).get('en', '')[:2500] 
             })
 
         prompt = f"Translate these games into {', '.join(TARGET_LANGS)}: {json.dumps(batch_input)}"
