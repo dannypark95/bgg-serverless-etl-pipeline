@@ -4,6 +4,7 @@ import csv
 import os
 import time
 from google.cloud import storage
+from google.cloud.exceptions import NotFound
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -17,7 +18,8 @@ BUCKET_NAME = os.getenv("BUCKET_NAME")
 if not PROJECT_ID or not BUCKET_NAME:
     raise ValueError("Required env vars PROJECT_ID and BUCKET_NAME must be set")
 
-CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
+# Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
+CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv" 
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
 CHECKPOINT_FILE = "csv_progress.txt"
@@ -100,8 +102,11 @@ def main():
     if os.path.exists(LOCAL_MASTER_PATH):
         print(f"📤 Uploading {MASTER_LIST_FILENAME} to Cloud Storage...")
         bucket.blob(MASTER_LIST_FILENAME).upload_from_filename(LOCAL_MASTER_PATH)
-        # Clear checkpoint on total success
-        bucket.blob(CHECKPOINT_FILE).delete()
+        # Clear checkpoint on total success (may not exist on first run)
+        try:
+            bucket.blob(CHECKPOINT_FILE).delete()
+        except NotFound:
+            pass
         print("🎉 CSV Filtering complete.")
     else:
         print("❌ Error: Temp file was not created.")

@@ -34,12 +34,20 @@ main:
           job_name: "bgg-csv-job"
           project_id: ${project_id}
           location: ${location}
+          overrides:
+            env:
+              - name: "CURR_DATE"
+                value: ${curr_date}
     - run_bgg_extractor_job:
         call: run_job_and_wait
         args:
           job_name: "bgg-extractor-job"
           project_id: ${project_id}
           location: ${location}
+          overrides:
+            env:
+              - name: "CURR_DATE"
+                value: ${curr_date}
 
     - check_translation_loop:
         switch:
@@ -53,6 +61,7 @@ main:
           job_name: "gemini-translator-job"
           project_id: ${project_id}
           location: ${location}
+          overrides: {}
         next: increment_iteration
 
     - increment_iteration:
@@ -65,13 +74,17 @@ main:
 
 # --- Reusable Sub-workflow ---
 run_job_and_wait:
-  params: [job_name, project_id, location]
+  params: [job_name, project_id, location, overrides]
   steps:
     - start_job:
         call: googleapis.run.v1.namespaces.jobs.run
         args:
           name: ${"namespaces/" + project_id + "/jobs/" + job_name}
           location: ${location}
+          body:
+            overrides:
+              containerOverrides:
+                - env: ${default(map.get(default(overrides, {}), "env"), [])}
         result: execution
     
     - wait_for_completion:

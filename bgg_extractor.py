@@ -23,7 +23,8 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
 PROGRESS_FILE = "extractor_progress.txt"
 
-CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
+# Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
+CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
 
 CHUNK_SIZE = 20 
