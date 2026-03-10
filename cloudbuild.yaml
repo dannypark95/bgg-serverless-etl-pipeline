@@ -15,7 +15,7 @@ steps:
   - name: "gcr.io/cloud-builders/docker"
     args: ["push", "gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest"]
 
-  # Step 3: Deploy CSV Job (1hr - fetches expansions via BGG API, ~5s per 20 games)
+  # Step 3: Deploy CSV Job (4hr timeout, 0.5 vCPU - I/O bound, completes in single run)
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: gcloud
     args:
@@ -26,11 +26,13 @@ steps:
       - "--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest"
       - "--command=python,bgg_csv.py"
       - "--region=${_REGION}"
-      - "--task-timeout=3600s"
-      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION},TASK_TIMEOUT=3600"
+      - "--task-timeout=14400s"
+      - "--cpu=0.5"
+      - "--memory=512Mi"
+      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION},TASK_TIMEOUT=14400"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
 
-  # Step 4: Deploy Extractor Job (Increased timeout to 1 hour)
+  # Step 4: Deploy Extractor Job (0.5 vCPU - I/O bound on BGG API)
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: gcloud
     args:
@@ -42,6 +44,8 @@ steps:
       - "--command=python,bgg_extractor.py"
       - "--region=${_REGION}"
       - "--task-timeout=3600s"
+      - "--cpu=0.5"
+      - "--memory=512Mi"
       - "--max-retries=3"
       - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
