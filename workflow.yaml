@@ -8,6 +8,8 @@ main:
           - curr_date: ${text.split(time.format(sys.now()), "T")[0]}
           - iteration: 0
           - max_iterations: 5
+          - csv_loop_count: 0
+          - max_csv_loops: 15
 
     - check_if_csv_exists:
         try:
@@ -21,11 +23,9 @@ main:
           as: e
           steps:
             - file_not_found:
-                # If 404, we must run the CSV job
                 next: run_bgg_csv_job
 
     - skip_to_extractor:
-        # If we reached this step, it means 'try' succeeded (file exists)
         next: run_bgg_extractor_job
 
     - run_bgg_csv_job:
@@ -38,6 +38,31 @@ main:
             env:
               - name: "CURR_DATE"
                 value: ${curr_date}
+        result: csv_job_result
+
+    - check_csv_after_run:
+        try:
+          call: http.get
+          args:
+            url: ${"https://storage.googleapis.com/storage/v1/b/" + bucket_name + "/o/bgg_master_list_" + curr_date + ".csv"}
+            auth:
+              type: OAuth2
+          result: file_check
+          next: run_bgg_extractor_job
+        except:
+          as: e
+          steps:
+            - csv_still_missing:
+                assign:
+                  - csv_loop_count: ${csv_loop_count + 1}
+                switch:
+                  - condition: ${csv_loop_count < max_csv_loops}
+                    next: run_bgg_csv_job
+                next: fail_csv_timeout
+
+    - fail_csv_timeout:
+        raise: "CSV job did not complete after 15 runs. Check checkpoint in GCS."
+
     - run_bgg_extractor_job:
         call: run_job_and_wait
         args:

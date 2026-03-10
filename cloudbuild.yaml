@@ -27,7 +27,7 @@ steps:
       - "--command=python,bgg_csv.py"
       - "--region=${_REGION}"
       - "--task-timeout=3600s"
-      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}"
+      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION},TASK_TIMEOUT=3600"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
 
   # Step 4: Deploy Extractor Job (Increased timeout to 1 hour)

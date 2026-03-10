@@ -12,3 +12,6 @@ tests/output_master_list.csv
 tests/output_extractor.csv
 tests/output_extractor.json
 tests/output_translations.json
+
+# GCS checkpoint (used in production)
+bgg_csv_checkpoint_*.json
