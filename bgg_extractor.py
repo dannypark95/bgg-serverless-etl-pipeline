@@ -90,6 +90,16 @@ def init_cache():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS game_hashes (bgg_id TEXT PRIMARY KEY, hash TEXT)''')
     conn.commit()
+    # Migrate old schema: if table exists with wrong columns (e.g. no "hash"), recreate
+    try:
+        c.execute("SELECT hash FROM game_hashes LIMIT 1")
+    except sqlite3.OperationalError as e:
+        if "no such column" in str(e).lower():
+            c.execute("DROP TABLE IF EXISTS game_hashes")
+            c.execute('''CREATE TABLE game_hashes (bgg_id TEXT PRIMARY KEY, hash TEXT)''')
+            conn.commit()
+        else:
+            raise
     return conn
 
 def get_cached_hash(c, bgg_id):
