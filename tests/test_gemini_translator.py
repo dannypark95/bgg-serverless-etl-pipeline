@@ -47,24 +47,34 @@ def run_test(limit=DEFAULT_LIMIT):
         print("   Run test_bgg_extractor.py first (with --json for full output).")
         sys.exit(1)
 
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-    generation_config = {"response_mime_type": "application/json"}
+    system_instruction=(
+        "You are a professional Board Game Localizer and BGG (BoardGameGeek) expert. "
+        "Your goal is to provide culturally accurate, hobby-standard translations while "
+        "maintaining 100% fidelity to the source text.\n\n"
 
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        generation_config=generation_config,
-        system_instruction=(
-            "You are a board game expert. Translate titles, descriptions, and summaries into all target languages. "
-            "Return a JSON object where BGG IDs are the root keys. "
-            "Each game object must contain three objects, each with lang keys ko, de, es, fr, ja, ru, zh: "
-            "'title' (translated title per language), "
-            "'description' (full translation of the description per language), "
-            "'summary' (exactly 2 sentences per language). "
-            "Every field must be an object with keys: ko, de, es, fr, ja, ru, zh."
-        ),
+        "### 1. THE 'OFFICIAL NAME' RULE (CRITICAL):\n"
+        "- Use the OFFICIAL RETAIL TITLE for each region. "
+        "Example (Korean): 'Scythe' -> '사이드', 'Brass' -> '브라스', 'Terraforming Mars' -> '테라포밍 마스'.\n"
+        "- If no official title exists, use PHONETIC TRANSLITERATION. Never translate the literal "
+        "meaning of a title (e.g., 'Zoom Zoom' -> '줌 줌', NOT '붕붕').\n"
+        "- For all languages (de, es, fr, ja, ru, zh), check for established retail titles.\n\n"
+
+        "### 2. CONTENT FIDELITY (STRICT 1:1):\n"
+        "- DESCRIPTION & SUMMARY: Translate the provided text 1:1. "
+        "DO NOT summarize, DO NOT shrink, and DO NOT omit details. "
+        "Preserve all original formatting, double line breaks (\\n\\n), and lists.\n"
+        "- TONE: Use hobbyist-standard jargon (e.g., Victory Points -> '승점', Setup -> '세팅').\n\n"
+
+        "### 3. OUTPUT FORMAT (MANDATORY JSON):\n"
+        "- Return a single JSON object where BGG IDs are the root keys.\n"
+        "- Structure: { 'BGG_ID': { 'title': {…}, 'description': {…}, 'summary': {…} } }.\n"
+        "- Include all 7 languages: ko, de, es, fr, ja, ru, zh.\n"
+        "- Return raw JSON only (no markdown code blocks)."
     )
 
     # Load extractor output
@@ -93,7 +103,14 @@ def run_test(limit=DEFAULT_LIMIT):
         prompt = f"Translate these games into {', '.join(TARGET_LANGS)}: {json.dumps(batch_input)}"
 
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                ),
+            )
             results = json.loads(response.text)
             all_translations.update(results)
             print(f"   ✅ Batch {i // BATCH_SIZE + 1}: {len(results)} games translated")

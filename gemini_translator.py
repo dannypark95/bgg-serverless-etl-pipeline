@@ -1,7 +1,8 @@
 import os
 import json
 import time
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from google.cloud import firestore
 from dotenv import load_dotenv
 
@@ -12,19 +13,19 @@ PROJECT_ID = os.getenv("PROJECT_ID")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
 # Use Gemini 3 Flash for the best balance of speed and hobby-specific knowledge
-MODEL_ID = "gemini-3-flash-preview" 
+MODEL_ID = "gemini-3-flash-preview"
 
 if not PROJECT_ID or not os.getenv("GEMINI_API_KEY"):
     raise ValueError("Required env vars PROJECT_ID and GEMINI_API_KEY must be set")
 
-BATCH_SIZE = 5 
+BATCH_SIZE = 5
 START_TIME = time.time()
-TIMEOUT_BUFFER = 60 
+TIMEOUT_BUFFER = 60
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # --- THE "BOARD GAME EXPERT" INSTRUCTIONS ---
-system_instruction=(
+SYSTEM_INSTRUCTION = (
     "You are a professional Board Game Localizer and BGG (BoardGameGeek) expert. "
     "Your goal is to provide culturally accurate, hobby-standard translations while "
     "maintaining 100% fidelity to the source text.\n\n"
@@ -49,23 +50,27 @@ system_instruction=(
     "- Return raw JSON only (no markdown code blocks)."
 )
 
-model = genai.GenerativeModel(
-    model_name=MODEL_ID,
-    generation_config={"response_mime_type": "application/json"},
-    system_instruction=system_instruction
-)
-
 db = firestore.Client(project=PROJECT_ID)
 
 def run_localized_translation():
-    # Fetch games where Korean title is empty
-    docs = list(db.collection(COLLECTION_NAME).where("title.ko", "==", "").limit(500).stream())
-    
+    # Fetch games where ANY target language field is empty (title, description, or summary)
+    seen = {}
+    coll = db.collection(COLLECTION_NAME)
+    for lang in TARGET_LANGS:
+        for field in ("title", "description", "summary_description"):
+            try:
+                for doc in coll.where(f"{field}.{lang}", "==", "").limit(500).stream():
+                    seen[doc.id] = doc
+            except Exception:
+                # Firestore may require composite index for description/summary_description
+                pass
+    docs = list(seen.values())
+
     if not docs:
         print("✅ No new games to translate.")
         return
 
-    print(f"📡 Found {len(docs)} games. Starting localization with {MODEL_ID}...")
+    print(f"📡 Found {len(docs)} games needing translation. Starting localization with {MODEL_ID}...")
 
     for i in range(0, len(docs), BATCH_SIZE):
         # Safety check for Cloud Run timeout
@@ -81,8 +86,8 @@ def run_localized_translation():
             batch_input.append({
                 "id": doc.id,
                 "title_en": d.get('title', {}).get('en', ''),
-                "summary_en": d.get('summary', {}).get('en', ''),
-                "description_en": d.get('description', {}).get('en', '')[:3000] 
+                "summary_en": d.get('summary_description', d.get('summary', {})).get('en', ''),
+                "description_en": d.get('description', {}).get('en', '')[:3000]
             })
 
         prompt = (
@@ -91,26 +96,38 @@ def run_localized_translation():
         )
         
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=MODEL_ID,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                ),
+            )
             results = json.loads(response.text)
             
             write_batch = db.batch()
-            for bgg_id, trans in results.items():
+            for idx, doc in enumerate(chunk):
+                bgg_id = doc.id
+                trans = results.get(bgg_id) or results.get(str(bgg_id))
+                if not trans:
+                    continue
+                d = doc.to_dict()
                 doc_ref = db.collection(COLLECTION_NAME).document(bgg_id)
                 update = {"updated_at": firestore.SERVER_TIMESTAMP}
-                
+
                 for lang in TARGET_LANGS:
-                    # Update Title, Summary, and Description per language
-                    if lang in trans.get('title', {}):
-                        update[f"title.{lang}"] = trans['title'][lang]
-                    if lang in trans.get('summary', {}):
-                        update[f"summary_description.{lang}"] = trans['summary'][lang]
-                    if lang in trans.get('description', {}):
-                        update[f"description.{lang}"] = trans['description'][lang]
-                
-                write_batch.update(doc_ref, update)
-                # Verification log
-                print(f"   ↳ ID {bgg_id} -> KO Title: {trans.get('title', {}).get('ko', 'ERROR')}")
+                    # Only fill empty fields - don't overwrite existing translations
+                    if not (d.get("title", {}) or {}).get(lang, "").strip() and lang in trans.get("title", {}):
+                        update[f"title.{lang}"] = trans["title"][lang]
+                    if not (d.get("summary_description", d.get("summary", {})) or {}).get(lang, "").strip() and lang in trans.get("summary", {}):
+                        update[f"summary_description.{lang}"] = trans["summary"][lang]
+                    if not (d.get("description", {}) or {}).get(lang, "").strip() and lang in trans.get("description", {}):
+                        update[f"description.{lang}"] = trans["description"][lang]
+
+                if len(update) > 1:  # more than just updated_at
+                    write_batch.update(doc_ref, update)
+                    print(f"   ↳ ID {bgg_id} -> filled empty fields")
             
             write_batch.commit()
             print(f"✅ Batch ({i+BATCH_SIZE}/{len(docs)}) committed.")
