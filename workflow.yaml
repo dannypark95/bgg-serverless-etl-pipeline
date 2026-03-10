@@ -48,17 +48,19 @@ main:
             auth:
               type: OAuth2
           result: file_check
-          next: run_bgg_extractor_job
         except:
           as: e
           steps:
-            - csv_still_missing:
+            - csv_increment:
                 assign:
                   - csv_loop_count: ${csv_loop_count + 1}
+                next: csv_check_loop
+            - csv_check_loop:
                 switch:
                   - condition: ${csv_loop_count < max_csv_loops}
                     next: run_bgg_csv_job
                 next: fail_csv_timeout
+        next: run_bgg_extractor_job
 
     - fail_csv_timeout:
         raise: "CSV job did not complete after 15 runs. Check checkpoint in GCS."
