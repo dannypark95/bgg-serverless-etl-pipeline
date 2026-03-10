@@ -30,7 +30,7 @@ steps:
       - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION},TASK_TIMEOUT=14400"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
 
-  # Step 4: Deploy Extractor Job
+  # Step 4: Deploy Extractor Job (~6hr for 75k games at 5s/chunk)
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: gcloud
     args:
@@ -41,7 +41,7 @@ steps:
       - "--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest"
       - "--command=python,bgg_extractor.py"
       - "--region=${_REGION}"
-      - "--task-timeout=3600s"
+      - "--task-timeout=28800s"
       - "--max-retries=3"
       - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
