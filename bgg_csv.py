@@ -99,6 +99,23 @@ def delete_checkpoint():
         pass
 
 
+def delete_old_checkpoints():
+    """Remove checkpoint files from previous dates to avoid accumulating stale data."""
+    prefix = "bgg_csv_checkpoint_"
+    current = CHECKPOINT_FILENAME
+    deleted = 0
+    for blob in bucket.list_blobs(prefix=prefix):
+        if blob.name != current:
+            try:
+                blob.delete()
+                deleted += 1
+                print(f"  🗑️ Deleted old checkpoint: {blob.name}")
+            except Exception as e:
+                print(f"  ⚠️ Could not delete {blob.name}: {e}")
+    if deleted:
+        print(f"  Cleaned up {deleted} old checkpoint(s)")
+
+
 def fetch_expansions_for_base_games(base_games, processed_ids, master_list_rows, start_time, total_base_games):
     """
     Query BGG API for each base game and fetch its expansion links.
@@ -195,6 +212,9 @@ def fetch_expansions_for_base_games(base_games, processed_ids, master_list_rows,
 def extract_logic():
     if not download_raw_from_gcs():
         return
+
+    # Clean up checkpoints from previous dates
+    delete_old_checkpoints()
 
     print("🚀 Step 1: Filtering base games from CSV...")
 

@@ -7,6 +7,7 @@ import time
 import sqlite3
 import hashlib
 import json
+from collections import defaultdict
 from tqdm import tqdm
 from google.cloud import storage, firestore
 from dotenv import load_dotenv
@@ -122,11 +123,55 @@ def generate_localized_dict(content, default_lang="en"):
     ldict[default_lang] = content if content else ""
     return ldict
 
+
+def build_games_with_parents(games):
+    """
+    Group master list rows by bgg_id, collecting all parent relationships.
+    Dedupes by parent_id (same parent can appear with different names; keep one per parent_id).
+    Returns list of dicts: [{bgg_id, name, is_expansion, parents: [{parent_id, parent_name}, ...]}, ...]
+    """
+    by_id = defaultdict(lambda: {"name": "", "is_expansion": False, "parents_by_id": {}})  # pid -> best pname
+    for row in games:
+        bid = str(row["bgg_id"])
+        by_id[bid]["name"] = row.get("name", "")
+        if row.get("is_expansion") == "True":
+            by_id[bid]["is_expansion"] = True
+        pid = str(row.get("parent_id", "")).strip()
+        pname = str(row.get("parent_name", "")).strip()
+        if pid:
+            # Keep longest name per parent_id (prefer full title over short)
+            existing = by_id[bid]["parents_by_id"].get(pid, "")
+            if len(pname) > len(existing):
+                by_id[bid]["parents_by_id"][pid] = pname
+
+    return [
+        {
+            "bgg_id": bid,
+            "name": info["name"],
+            "is_expansion": info["is_expansion"],
+            "parents": [{"parent_id": p, "parent_name": n} for p, n in info["parents_by_id"].items()],
+        }
+        for bid, info in by_id.items()
+    ]
+
+
 # --- MAIN EXECUTION ---
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true", help="Reset progress (use after schema change, e.g. multi-parent)")
+    args = parser.parse_args()
+
     if not download_files_from_gcs():
         return
+
+    if args.reset:
+        try:
+            bucket.blob(PROGRESS_FILE).upload_from_string("0")
+            print("  🔄 Progress reset to 0")
+        except Exception as e:
+            print(f"  ⚠️ Could not reset progress: {e}")
 
     conn = init_cache()
     c = conn.cursor()
@@ -136,6 +181,10 @@ def main():
     with open(MASTER_LIST_FILENAME, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         games = list(reader)
+
+    # Group by bgg_id so expansions with multiple parents get all relationships
+    games = build_games_with_parents(games)
+    print(f"  Master list: {len(games):,} unique games (multi-parent merged)")
 
     # Calculate chunks and find where we left off
     start_chunk_idx = get_progress()
@@ -153,7 +202,7 @@ def main():
             continue
             
         bgg_ids = [game['bgg_id'] for game in chunk]
-        chunk_dict = {game['bgg_id']: game for game in chunk}
+        chunk_dict = {str(game['bgg_id']): game for game in chunk}
         url = f"https://boardgamegeek.com/xmlapi2/thing?id={','.join(bgg_ids)}&stats=1"
         
         headers = {
@@ -173,7 +222,8 @@ def main():
                 for item in root.findall('item'):
                     bgg_id = item.get('id')
                     csv_row = chunk_dict.get(bgg_id, {})
-                    
+                    parents = csv_row.get('parents', [])
+
                     # Extract Data
                     title_en = item.find("name[@type='primary']").get('value') if item.find("name[@type='primary']") is not None else "Unknown"
                     desc_en = item.find('description').text if item.find('description') is not None else ""
@@ -183,7 +233,6 @@ def main():
                     rating = round(float(stats.find('average').get('value')), 2) if stats is not None else 0.0
                     weight = round(float(stats.find('averageweight').get('value')), 2) if stats is not None else 0.0
 
-                    # NEW: Localized Map Structure
                     doc_data = {
                         "bgg_id": bgg_id,
                         "title": generate_localized_dict(title_en),
@@ -195,7 +244,8 @@ def main():
                         "rating": rating,
                         "weight": weight,
                         "image_url": item.find('thumbnail').text if item.find('thumbnail') is not None else "",
-                        "is_expansion": csv_row.get('is_expansion') == 'True',
+                        "is_expansion": csv_row.get('is_expansion', False),
+                        "parents": parents,
                         "updated_at": firestore.SERVER_TIMESTAMP
                     }
 

@@ -15,3 +15,6 @@ tests/output_translations.json
 
 # GCS checkpoint (used in production)
 bgg_csv_checkpoint_*.json
+
+# Migration progress
+migrate_parent_progress.txt
