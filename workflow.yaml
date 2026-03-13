@@ -100,10 +100,12 @@ main:
         return: "Full Pipeline Succeeded!"
 
 # --- Reusable Sub-workflow ---
+# Cloud Run Jobs `namespaces.jobs.run` already blocks until the execution
+# finishes, so we can simply call it and return the resulting execution.
 run_job_and_wait:
   params: [job_name, project_id, location, overrides]
   steps:
-    - start_job:
+    - run_job:
         call: googleapis.run.v1.namespaces.jobs.run
         args:
           name: ${"namespaces/" + project_id + "/jobs/" + job_name}
@@ -113,27 +115,6 @@ run_job_and_wait:
               containerOverrides:
                 - env: ${default(map.get(overrides, "env"), [])}
         result: execution
-    
-    - wait_for_completion:
-        call: googleapis.run.v1.namespaces.executions.get
-        args:
-          name: ${execution.metadata.name}
-          location: ${location}
-        result: status
-    
-    - check_condition:
-        switch:
-          - condition: ${status.status.conditions[0].status == "Unknown"}
-            next: sleep_and_repeat
-          - condition: ${status.status.conditions[0].status == "False"}
-            raise: ${"Job " + job_name + " failed!"}
-        next: job_succeeded
 
-    - sleep_and_repeat:
-        call: sys.sleep
-        args:
-          seconds: 30
-        next: wait_for_completion
-
-    - job_succeeded:
-        return: ${status}
+    - done:
+        return: ${execution}
