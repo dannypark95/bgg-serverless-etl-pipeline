@@ -2,6 +2,7 @@ import os
 import json
 import time
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -137,7 +138,7 @@ def run_localized_translation():
     for lang in TARGET_LANGS:
         for field in ("title", "description", "summary_description"):
             try:
-                for doc in coll.where(f"{field}.{lang}", "==", "").limit(QUERY_LIMIT).stream():
+                for doc in coll.where(filter=FieldFilter(f"{field}.{lang}", "==", "")).limit(QUERY_LIMIT).stream():
                     seen[doc.id] = doc
             except Exception as e:
                 print(f"  ⚠️ Query {field}.{lang} failed (index?): {e}")
