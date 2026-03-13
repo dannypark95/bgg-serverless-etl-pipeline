@@ -27,7 +27,7 @@ steps:
       - "--command=python,bgg_csv.py"
       - "--region=${_REGION}"
       - "--task-timeout=14400s"
-      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION},TASK_TIMEOUT=14400"
+      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},TASK_TIMEOUT=14400"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
 
   # Step 4: Deploy Extractor Job (~6hr for 75k games at 5s/chunk)
@@ -43,7 +43,7 @@ steps:
       - "--region=${_REGION}"
       - "--task-timeout=28800s"
       - "--max-retries=3"
-      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME},COLLECTION_NAME=${_COLLECTION}"
+      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},BUCKET_NAME=${_BUCKET_NAME}"
       - "--set-secrets=BGG_TOKEN=BGG_TOKEN:latest"
 
   # Step 5: Deploy Translator Job (Increased timeout to 1 hour)
@@ -59,7 +59,7 @@ steps:
       - "--region=${_REGION}"
       - "--task-timeout=3600s"
       - "--max-retries=2"
-      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID},COLLECTION_NAME=${_COLLECTION}"
+      - "--set-env-vars=PROJECT_ID=${_PROJECT_ID}"
       - "--set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
   # Step 6: Prerequisites (Identity and API enablement)

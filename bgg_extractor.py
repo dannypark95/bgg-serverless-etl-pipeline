@@ -50,7 +50,7 @@ bucket = storage_client.bucket(BUCKET_NAME)
 
 def download_files_from_gcs():
     """Syncs the master list and cache DB from GCS for stateless environments."""
-    print("📥 Syncing files from Google Cloud Storage...")
+    print(f"📥 Syncing files from Google Cloud Storage... (collection: {COLLECTION_NAME})")
     try:
         blob = bucket.blob(MASTER_LIST_FILENAME)
         blob.download_to_filename(MASTER_LIST_FILENAME)
