@@ -39,6 +39,11 @@ def _repair_json_escapes(text):
 
 def _parse_gemini_json(text):
     """Parse Gemini JSON response, with retry and escape repair on failure."""
+    # Sometimes the client library can return a response with `text=None`
+    # (e.g. empty response, transport error). In that case we treat it as an
+    # empty result so the current batch is simply skipped instead of failing.
+    if text is None:
+        return {}
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
@@ -66,7 +71,6 @@ if not PROJECT_ID or not os.getenv("GEMINI_API_KEY"):
 BATCH_SIZE = 5
 QUERY_LIMIT = int(os.getenv("TRANSLATION_QUERY_LIMIT", "5000"))  # Per (field, lang) query; 500 was too low
 START_TIME = time.time()
-TIMEOUT_BUFFER = 60
 
 # --- THE "BOARD GAME EXPERT" INSTRUCTIONS ---
 SYSTEM_INSTRUCTION = (
@@ -77,6 +81,7 @@ SYSTEM_INSTRUCTION = (
     "### 1. THE 'OFFICIAL NAME' RULE (CRITICAL):\n"
     "- Use the OFFICIAL RETAIL TITLE for each region. "
     "Example (Korean): 'Scythe' -> '사이드', 'Brass' -> '브라스', 'Terraforming Mars' -> '테라포밍 마스'.\n"
+     "You MUST use boardlife.co.kr translation of the title for korean language."
     "- If no official title exists, use PHONETIC TRANSLITERATION. Never translate the literal "
     "meaning of a title (e.g., 'Zoom Zoom' -> '줌 줌', NOT '붕붕').\n"
     "- For all languages (de, es, fr, ja, ru, zh), check for established retail titles.\n\n"
@@ -94,7 +99,7 @@ SYSTEM_INSTRUCTION = (
     "- Return raw JSON only (no markdown code blocks).\n"
     "- Use valid JSON escapes only: \\\" \\\\ \\n \\t \\/ etc. Use \\\\ for literal backslash."
 
-    "You MUST use boardlife.co.kr translation of the title for korean language."
+   
 )
 
 # Support both google-genai (new) and google-generativeai (deprecated)
@@ -166,11 +171,6 @@ def run_localized_translation():
 
     for i in range(0, len(docs), BATCH_SIZE):
         batch_num += 1
-        # Safety check for Cloud Run timeout
-        if time.time() - START_TIME > (int(os.getenv("TASK_TIMEOUT", 600)) - TIMEOUT_BUFFER):
-            print("⏳ Time limit approaching. Stopping current job.")
-            break
-
         chunk = docs[i : i + BATCH_SIZE]
         batch_start = time.time()
         print(f"  Batch {batch_num}/{num_batches} ({len(chunk)} games)...", end=" ", flush=True)
