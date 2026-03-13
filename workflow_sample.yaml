@@ -39,6 +39,8 @@ main:
                 value: ${curr_date}
               - name: "SAMPLE_MAX_CHUNKS"
                 value: ${sample_chunks}
+              - name: "COLLECTION_NAME"
+                value: "test_boardgames"
         result: extractor_job_result
 
     - run_translator_once:
@@ -51,6 +53,8 @@ main:
             env:
               - name: "SAMPLE_MAX_GAMES"
                 value: ${sample_games}
+              - name: "COLLECTION_NAME"
+                value: "test_boardgames"
         result: translator_job_result
 
     - finish:
