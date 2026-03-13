@@ -22,13 +22,19 @@ BUCKET_NAME = os.getenv("BUCKET_NAME")
 MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
 
 # Sample mode: when workflow_sample passes SAMPLE_MAX_CHUNKS, route to a
-# separate collection and master-list file so test runs don't touch prod.
+# separate collection, master-list file, and cache/progress so tests don't
+# collide with production data.
 SAMPLE_MODE = bool(os.getenv("SAMPLE_MAX_CHUNKS"))
 _default_collection = "test_boardgames" if SAMPLE_MODE else "boardgames"
 
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", _default_collection)
-CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
-PROGRESS_FILE = "extractor_progress.txt"
+
+if SAMPLE_MODE or COLLECTION_NAME == "test_boardgames":
+    CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache_sample.sqlite")
+    PROGRESS_FILE = os.getenv("PROGRESS_FILE", "extractor_progress_sample.txt")
+else:
+    CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
+    PROGRESS_FILE = os.getenv("PROGRESS_FILE", "extractor_progress.txt")
 
 # Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
 CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
