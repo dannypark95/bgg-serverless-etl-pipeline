@@ -4,8 +4,10 @@ Board game database analysis script.
 Reports translation coverage, gaps, and other stats.
 """
 import os
+import time
 from collections import defaultdict
 from google.cloud import firestore
+from google.cloud.firestore_v1.field_path import FieldPath
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +17,8 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
 FIELDS = ("title", "description", "summary_description")
 QUERY_LIMIT = int(os.getenv("TRANSLATION_QUERY_LIMIT", "10000"))
+PAGE_SIZE = 500
+MAX_RETRIES = 3
 
 
 def _get_count(query, label=""):
@@ -103,6 +107,46 @@ def run_analysis():
     if total and max_missing:
         pct = 100 * max_missing / total
         print(f"  Translation gap: ~{pct:.1f}% of games missing at least one translation")
+    print()
+
+    # Count games with complete translation (all target langs filled for title, description, summary_description)
+    print("📊 Games with complete translation")
+    print("-" * 60)
+    complete = 0
+    start_after_doc = None
+    while True:
+        query = coll.order_by(FieldPath.document_id()).limit(PAGE_SIZE)
+        if start_after_doc:
+            query = query.start_after(start_after_doc)
+        docs = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                docs = list(query.stream())
+                break
+            except Exception as e:
+                if "timed out" in str(e).lower() or "503" in str(e) or "UNAVAILABLE" in str(e):
+                    time.sleep((attempt + 1) * 10)
+                else:
+                    raise
+        if not docs:
+            break
+        for doc in docs:
+            d = doc.to_dict()
+            title = d.get("title") or {}
+            desc = d.get("description") or {}
+            summary = d.get("summary_description") or d.get("summary") or {}
+            all_filled = all(
+                (title.get(lang) or "").strip() and (desc.get(lang) or "").strip() and (summary.get(lang) or "").strip()
+                for lang in TARGET_LANGS
+            )
+            if all_filled:
+                complete += 1
+        start_after_doc = docs[-1]
+        if len(docs) < PAGE_SIZE:
+            break
+    print(f"  Board games with complete translation: {complete:,}")
+    if total:
+        print(f"  ({100 * complete / total:.1f}% of total)")
     print()
     print("=" * 60)
 

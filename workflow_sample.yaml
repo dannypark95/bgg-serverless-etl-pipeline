@@ -1,0 +1,96 @@
+# Sample pipeline: same steps as main workflow but with small limits (manual trigger only).
+# Uses env overrides so the same Cloud Run jobs run in "sample" mode.
+main:
+  steps:
+    - init:
+        assign:
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - location: "us-central1"
+          - bucket_name: "boardgame-catalog-app.firebasestorage.app"
+          - curr_date: ${text.split(time.format(sys.now()), "T")[0]}
+          # Sample limits (override via job env)
+          - sample_base: "50"
+          - sample_chunks: "5"
+          - sample_games: "20"
+
+    - run_bgg_csv_job:
+        call: run_job_and_wait
+        args:
+          job_name: "bgg-csv-job"
+          project_id: ${project_id}
+          location: ${location}
+          overrides:
+            env:
+              - name: "CURR_DATE"
+                value: ${curr_date}
+              - name: "SAMPLE_MAX_BASE_GAMES"
+                value: ${sample_base}
+        result: csv_job_result
+
+    - run_bgg_extractor_job:
+        call: run_job_and_wait
+        args:
+          job_name: "bgg-extractor-job"
+          project_id: ${project_id}
+          location: ${location}
+          overrides:
+            env:
+              - name: "CURR_DATE"
+                value: ${curr_date}
+              - name: "SAMPLE_MAX_CHUNKS"
+                value: ${sample_chunks}
+        result: extractor_job_result
+
+    - run_translator_once:
+        call: run_job_and_wait
+        args:
+          job_name: "gemini-translator-job"
+          project_id: ${project_id}
+          location: ${location}
+          overrides:
+            env:
+              - name: "SAMPLE_MAX_GAMES"
+                value: ${sample_games}
+        result: translator_job_result
+
+    - finish:
+        return: "Sample pipeline succeeded!"
+
+# Reuse same subworkflow as main pipeline
+run_job_and_wait:
+  params: [job_name, project_id, location, overrides]
+  steps:
+    - start_job:
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + project_id + "/jobs/" + job_name}
+          location: ${location}
+          body:
+            overrides:
+              containerOverrides:
+                - env: ${default(map.get(overrides, "env"), [])}
+        result: execution
+
+    - wait_for_completion:
+        call: googleapis.run.v1.namespaces.executions.get
+        args:
+          name: ${execution.metadata.name}
+          location: ${location}
+        result: status
+
+    - check_condition:
+        switch:
+          - condition: ${status.status.conditions[0].status == "Unknown"}
+            next: sleep_and_repeat
+          - condition: ${status.status.conditions[0].status == "False"}
+            raise: ${"Job " + job_name + " failed!"}
+        next: job_succeeded
+
+    - sleep_and_repeat:
+        call: sys.sleep
+        args:
+          seconds: 30
+        next: wait_for_completion
+
+    - job_succeeded:
+        return: ${status}

@@ -83,6 +83,18 @@ steps:
         "--location=${_REGION}",
       ]
 
+  # Step 7b: Deploy Sample Workflow (manual trigger only; runs translator sample job)
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      [
+        "workflows",
+        "deploy",
+        "bgg-sample-pipeline",
+        "--source=workflow_sample.yaml",
+        "--location=${_REGION}",
+      ]
+
   # Step 8: Deploy Schedule
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"

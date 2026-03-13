@@ -234,6 +234,13 @@ def extract_logic():
     processed_ids, master_list_rows = load_checkpoint()
     base_games_to_process = [g for g in base_games if str(g["bgg_id"]) not in processed_ids]
 
+    # Sample run: limit base games to process (e.g. workflow passes SAMPLE_MAX_BASE_GAMES=50)
+    sample_max = os.getenv("SAMPLE_MAX_BASE_GAMES")
+    if sample_max:
+        n = int(sample_max)
+        base_games_to_process = base_games_to_process[:n]
+        print(f"⚠️ SAMPLE MODE: limiting to first {len(base_games_to_process)} base games (SAMPLE_MAX_BASE_GAMES={sample_max})")
+
     if not base_games_to_process and len(master_list_rows) > 0:
         # All done - write final CSV
         print("  All base games already processed (from checkpoint).")

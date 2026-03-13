@@ -189,7 +189,15 @@ def main():
     # Calculate chunks and find where we left off
     start_chunk_idx = get_progress()
     chunks = [games[i:i + CHUNK_SIZE] for i in range(0, len(games), CHUNK_SIZE)]
-    
+
+    # Sample run: limit chunks (e.g. workflow passes SAMPLE_MAX_CHUNKS=5)
+    sample_max_chunks = os.getenv("SAMPLE_MAX_CHUNKS")
+    if sample_max_chunks:
+        n = int(sample_max_chunks)
+        chunks = chunks[:n]
+        start_chunk_idx = 0  # sample runs from start of limited set
+        print(f"⚠️ SAMPLE MODE: limiting to first {len(chunks)} chunks (SAMPLE_MAX_CHUNKS={sample_max_chunks})")
+
     print(f"🔄 Resuming from chunk {start_chunk_idx} of {len(chunks)}")
 
     batch = db.batch()

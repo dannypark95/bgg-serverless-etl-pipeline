@@ -137,6 +137,13 @@ def run_localized_translation():
                 print(f"  ⚠️ Query {field}.{lang} failed (index?): {e}")
     docs = list(seen.values())
 
+    # Sample run: limit to small set (e.g. workflow passes SAMPLE_MAX_GAMES=20)
+    sample_max = os.getenv("SAMPLE_MAX_GAMES")
+    if sample_max:
+        n = int(sample_max)
+        docs = docs[:n]
+        print(f"⚠️ SAMPLE MODE: limiting to first {len(docs)} games (SAMPLE_MAX_GAMES={sample_max})")
+
     if not docs:
         print("✅ No new games to translate.")
         return
