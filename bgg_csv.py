@@ -21,7 +21,13 @@ if not PROJECT_ID or not BUCKET_NAME:
 # Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
 CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv"
-MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
+
+# Sample mode: when workflow_sample passes SAMPLE_MAX_BASE_GAMES, write to a
+# distinct master-list name so tests don't collide with production assets.
+SAMPLE_MODE = bool(os.getenv("SAMPLE_MAX_BASE_GAMES"))
+_master_prefix = "sample_master_list" if SAMPLE_MODE else "bgg_master_list"
+MASTER_LIST_FILENAME = f"{_master_prefix}_{CURRENT_DATE}.csv"
+
 CHECKPOINT_FILENAME = f"bgg_csv_checkpoint_{CURRENT_DATE}.json"
 RATING_THRESHOLD = 73
 

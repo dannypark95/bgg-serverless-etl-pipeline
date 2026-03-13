@@ -48,7 +48,13 @@ def _parse_gemini_json(text):
 
 # --- CONFIGURATION ---
 PROJECT_ID = os.getenv("PROJECT_ID")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
+
+# Sample mode: when workflow_sample passes SAMPLE_MAX_GAMES, point translations
+# at the test collection by default so they don't mutate production docs.
+SAMPLE_MODE = bool(os.getenv("SAMPLE_MAX_GAMES"))
+_default_collection = "test_boardgames" if SAMPLE_MODE else "boardgames"
+
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", _default_collection)
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
 # Use Gemini 3 Flash for the best balance of speed and hobby-specific knowledge
 MODEL_ID = "gemini-3-flash-preview"

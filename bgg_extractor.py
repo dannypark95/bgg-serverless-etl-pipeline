@@ -20,13 +20,20 @@ load_dotenv()
 PROJECT_ID = os.getenv("PROJECT_ID")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
 MY_BGG_TOKEN = os.getenv("BGG_TOKEN")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "boardgames")
+
+# Sample mode: when workflow_sample passes SAMPLE_MAX_CHUNKS, route to a
+# separate collection and master-list file so test runs don't touch prod.
+SAMPLE_MODE = bool(os.getenv("SAMPLE_MAX_CHUNKS"))
+_default_collection = "test_boardgames" if SAMPLE_MODE else "boardgames"
+
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", _default_collection)
 CACHE_DB = os.getenv("CACHE_DB", "bgg_sync_cache.sqlite")
 PROGRESS_FILE = "extractor_progress.txt"
 
 # Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
 CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
-MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
+_master_prefix = "sample_master_list" if SAMPLE_MODE else "bgg_master_list"
+MASTER_LIST_FILENAME = f"{_master_prefix}_{CURRENT_DATE}.csv"
 
 CHUNK_SIZE = 20 
 SLEEP_SUCCESS = 5  # BGG recommends 5s between requests
