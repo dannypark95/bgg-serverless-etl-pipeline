@@ -39,6 +39,8 @@ main:
                 value: ${curr_date}
               - name: "SAMPLE_MAX_CHUNKS"
                 value: ${sample_chunks}
+              - name: "COLLECTION_NAME"
+                value: "test_boardgames"
         result: extractor_job_result
 
     - run_translator_once:
@@ -51,16 +53,19 @@ main:
             env:
               - name: "SAMPLE_MAX_GAMES"
                 value: ${sample_games}
+              - name: "COLLECTION_NAME"
+                value: "test_boardgames"
         result: translator_job_result
 
     - finish:
         return: "Sample pipeline succeeded!"
 
 # Reuse same subworkflow as main pipeline
+# Cloud Run Jobs `namespaces.jobs.run` already blocks until completion.
 run_job_and_wait:
   params: [job_name, project_id, location, overrides]
   steps:
-    - start_job:
+    - run_job:
         call: googleapis.run.v1.namespaces.jobs.run
         args:
           name: ${"namespaces/" + project_id + "/jobs/" + job_name}
@@ -71,26 +76,5 @@ run_job_and_wait:
                 - env: ${default(map.get(overrides, "env"), [])}
         result: execution
 
-    - wait_for_completion:
-        call: googleapis.run.v1.namespaces.executions.get
-        args:
-          name: ${execution.metadata.name}
-          location: ${location}
-        result: status
-
-    - check_condition:
-        switch:
-          - condition: ${status.status.conditions[0].status == "Unknown"}
-            next: sleep_and_repeat
-          - condition: ${status.status.conditions[0].status == "False"}
-            raise: ${"Job " + job_name + " failed!"}
-        next: job_succeeded
-
-    - sleep_and_repeat:
-        call: sys.sleep
-        args:
-          seconds: 30
-        next: wait_for_completion
-
-    - job_succeeded:
-        return: ${status}
+    - done:
+        return: ${execution}

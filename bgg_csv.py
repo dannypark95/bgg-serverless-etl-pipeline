@@ -21,7 +21,13 @@ if not PROJECT_ID or not BUCKET_NAME:
 # Use CURR_DATE from env if set (for workflow timezone alignment), else local/UTC
 CURRENT_DATE = os.getenv("CURR_DATE") or datetime.now().strftime("%Y-%m-%d")
 RAW_DUMP_FILENAME = f"bg_ranks_raw_{CURRENT_DATE}.csv"
-MASTER_LIST_FILENAME = f"bgg_master_list_{CURRENT_DATE}.csv"
+
+# Sample mode: when workflow_sample passes SAMPLE_MAX_BASE_GAMES, write to a
+# distinct master-list name so tests don't collide with production assets.
+SAMPLE_MODE = bool(os.getenv("SAMPLE_MAX_BASE_GAMES"))
+_master_prefix = "sample_master_list" if SAMPLE_MODE else "bgg_master_list"
+MASTER_LIST_FILENAME = f"{_master_prefix}_{CURRENT_DATE}.csv"
+
 CHECKPOINT_FILENAME = f"bgg_csv_checkpoint_{CURRENT_DATE}.json"
 RATING_THRESHOLD = 73
 
@@ -45,16 +51,58 @@ storage_client = storage.Client(project=PROJECT_ID)
 bucket = storage_client.bucket(BUCKET_NAME)
 
 
+def _find_latest_raw_blob_name():
+    """
+    Find the most recent raw dump blob in GCS.
+
+    We look for blobs with prefix 'bg_ranks_raw_' and pick the one with the
+    most recent 'updated' timestamp. Falls back to None if listing fails or
+    no such blobs exist.
+    """
+    try:
+        latest_blob = None
+        for blob in bucket.list_blobs(prefix="bg_ranks_raw_"):
+            if latest_blob is None or blob.updated > latest_blob.updated:
+                latest_blob = blob
+        return latest_blob.name if latest_blob else None
+    except Exception as e:
+        print(f"⚠️ Could not list raw dumps in GCS: {e}")
+        return None
+
+
 def download_raw_from_gcs():
-    """Download raw dump from GCS if not present."""
+    """
+    Download raw dump from GCS if not present.
+
+    - First tries the date-specific filename for backwards compatibility.
+    - If that 404s, falls back to the most recent 'bg_ranks_raw_*.csv' blob.
+    """
     if os.path.exists(LOCAL_RAW_PATH):
         return True
-    print(f"📥 Downloading {RAW_DUMP_FILENAME} from GCS...")
+
+    # 1) Try date-specific file (what older runs expect)
+    print(f"📥 Attempting download of date-specific raw: {RAW_DUMP_FILENAME} ...")
     try:
         bucket.blob(RAW_DUMP_FILENAME).download_to_filename(LOCAL_RAW_PATH)
         return True
     except Exception as e:
-        print(f"❌ Download failed: {e}")
+        print(f"❌ Date-specific download failed: {e}")
+
+    # 2) Fallback: latest available raw dump in bucket
+    latest_name = _find_latest_raw_blob_name()
+    if not latest_name:
+        print("❌ No bg_ranks_raw_*.csv files found in GCS.")
+        return False
+
+    print(f"📥 Falling back to latest raw dump: {latest_name} ...")
+    temp_path = os.path.join("/tmp", os.path.basename(latest_name))
+    try:
+        bucket.blob(latest_name).download_to_filename(temp_path)
+        # Normalize to LOCAL_RAW_PATH so downstream code doesn't care about the name.
+        os.replace(temp_path, LOCAL_RAW_PATH)
+        return True
+    except Exception as e:
+        print(f"❌ Latest-raw download failed: {e}")
         return False
 
 
