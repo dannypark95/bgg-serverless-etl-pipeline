@@ -57,7 +57,7 @@ steps:
       - "--image=gcr.io/${PROJECT_ID}/bgg-pipeline-image:latest"
       - "--command=python,gemini_translator.py"
       - "--region=${_REGION}"
-      - "--task-timeout=3600s"
+      - "--task-timeout=86400s"
       - "--max-retries=2"
       - "--set-env-vars=PROJECT_ID=${_PROJECT_ID}"
       - "--set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest"
