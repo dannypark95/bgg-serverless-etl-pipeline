@@ -63,7 +63,7 @@ _default_collection = "test_boardgames" if SAMPLE_MODE else "boardgames"
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", _default_collection)
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
 # Use Gemini 2.5 Flash for the best balance of speed and hobby-specific knowledge
-MODEL_ID = "gemini-2.5-flash-preview"
+MODEL_ID = "gemini-2.5-flash"
 
 if not PROJECT_ID or not os.getenv("GEMINI_API_KEY"):
     raise ValueError("Required env vars PROJECT_ID and GEMINI_API_KEY must be set")
