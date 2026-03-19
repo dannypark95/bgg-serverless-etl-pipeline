@@ -62,8 +62,8 @@ _default_collection = "test_boardgames" if SAMPLE_MODE else "boardgames"
 
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", _default_collection)
 TARGET_LANGS = ["ko", "de", "es", "fr", "ja", "ru", "zh"]
-# Use Gemini 3 Flash for the best balance of speed and hobby-specific knowledge
-MODEL_ID = "gemini-3-flash-preview"
+# Use Gemini 2.5 Flash for the best balance of speed and hobby-specific knowledge
+MODEL_ID = "gemini-2.5-flash-preview"
 
 if not PROJECT_ID or not os.getenv("GEMINI_API_KEY"):
     raise ValueError("Required env vars PROJECT_ID and GEMINI_API_KEY must be set")
@@ -81,25 +81,24 @@ SYSTEM_INSTRUCTION = (
     "### 1. THE 'OFFICIAL NAME' RULE (CRITICAL):\n"
     "- Use the OFFICIAL RETAIL TITLE for each region. "
     "Example (Korean): 'Scythe' -> '사이드', 'Brass' -> '브라스', 'Terraforming Mars' -> '테라포밍 마스'.\n"
-     "You MUST use boardlife.co.kr translation of the title for korean language."
-    "- If no official title exists, use PHONETIC TRANSLITERATION. Never translate the literal "
+    "For Korean (ko): if title.ko is requested (missing), use PHONETIC TRANSLITERATION from the English title. "
+    "Do not create Korean titles when title.ko is not requested.\n"
+    "- If no official title exists in other languages, use PHONETIC TRANSLITERATION. Never translate the literal "
     "meaning of a title (e.g., 'Zoom Zoom' -> '줌 줌', NOT '붕붕').\n"
     "- For all languages (de, es, fr, ja, ru, zh), check for established retail titles.\n\n"
 
     "### 2. CONTENT FIDELITY (STRICT 1:1):\n"
-    "- DESCRIPTION & SUMMARY: Translate the provided text 1:1. "
+    "- DESCRIPTION: Translate the provided text 1:1. "
     "DO NOT summarize, DO NOT shrink, and DO NOT omit details. "
     "Preserve all original formatting, double line breaks (\\n\\n), and lists.\n"
     "- TONE: Use hobbyist-standard jargon (e.g., Victory Points -> '승점', Setup -> '세팅').\n\n"
 
-    "### 3. OUTPUT FORMAT (MANDATORY JSON):\n"
+    "### 3. OUTPUT FORMAT (MANDATORY JSON ONLY):\n"
     "- Return a single JSON object where BGG IDs are the root keys.\n"
-    "- Structure: { 'BGG_ID': { 'title': {...}, 'description': {...}, 'summary': {...} } }.\n"
-    "- Include all 7 languages: ko, de, es, fr, ja, ru, zh.\n"
-    "- Return raw JSON only (no markdown code blocks).\n"
+    "- Structure: { 'BGG_ID': { 'title': {...}, 'description': {...} } }.\n"
+    "- Only include fields and languages explicitly requested in the prompt.\n"
+    "- Return only JSON, no commentary, no explanation, no markdown.\n"
     "- Use valid JSON escapes only: \\\" \\\\ \\n \\t \\/ etc. Use \\\\ for literal backslash."
-
-   
 )
 
 # Support both google-genai (new) and google-generativeai (deprecated)
@@ -132,16 +131,22 @@ except ImportError:
 
 db = firestore.Client(project=PROJECT_ID)
 
+
+def _safe_get(mapping, key):
+    if not isinstance(mapping, dict):
+        return ""
+    return (mapping.get(key) or "").strip()
+
 def run_localized_translation():
     print("=" * 60)
     print("Gemini Translator")
     print("=" * 60)
 
-    # Fetch games where ANY target language field is empty (title, description, or summary)
+    # Fetch games where ANY target language field is empty (title or description).
     seen = {}
     coll = db.collection(COLLECTION_NAME)
     for lang in TARGET_LANGS:
-        for field in ("title", "description", "summary_description"):
+        for field in ("title", "description"):
             try:
                 for doc in coll.where(filter=FieldFilter(f"{field}.{lang}", "==", "")).limit(QUERY_LIMIT).stream():
                     seen[doc.id] = doc
@@ -173,21 +178,61 @@ def run_localized_translation():
         batch_num += 1
         chunk = docs[i : i + BATCH_SIZE]
         batch_start = time.time()
-        print(f"  Batch {batch_num}/{num_batches} ({len(chunk)} games)...", end=" ", flush=True)
-        batch_input = []
-        
+
+        # Build per-game instructions that only request missing fields/langs.
+        request_games = []
         for doc in chunk:
-            d = doc.to_dict()
-            batch_input.append({
-                "id": doc.id,
-                "title_en": d.get('title', {}).get('en', ''),
-                "summary_en": d.get('summary_description', d.get('summary', {})).get('en', ''),
-                "description_en": d.get('description', {}).get('en', '')[:3000]
-            })
+            d = doc.to_dict() or {}
+            title_map = d.get("title") or {}
+            desc_map = d.get("description") or {}
+
+            need_title_langs = []
+            need_desc_langs = []
+            for lang in TARGET_LANGS:
+                if not _safe_get(title_map, lang):
+                    need_title_langs.append(lang)
+                if not _safe_get(desc_map, lang):
+                    need_desc_langs.append(lang)
+
+            if not need_title_langs and not need_desc_langs:
+                continue
+
+            request_games.append(
+                {
+                    "id": doc.id,
+                    "source": {
+                        "title_en": _safe_get(title_map, "en"),
+                        "description_en": _safe_get(desc_map, "en")[:3000],
+                    },
+                    "need": {
+                        "title": need_title_langs,
+                        "description": need_desc_langs,
+                    },
+                }
+            )
+
+        if not request_games:
+            print(f"  Batch {batch_num}/{num_batches} (0 games needing work)... skipping Gemini call.")
+            continue
+
+        print(f"  Batch {batch_num}/{num_batches} ({len(request_games)} games to translate)...", end=" ", flush=True)
 
         prompt = (
-            f"Localize these {len(batch_input)} board game entries into {', '.join(TARGET_LANGS)}. "
-            f"Cross-reference the IDs for official names: {json.dumps(batch_input)}"
+            "You will receive a list of board games with their English title and description, "
+            "and, for each game, a list of which fields and languages still need translation.\n"
+            "For each game, translate ONLY the requested fields and languages.\n"
+            "If Korean title (ko) is requested, translate it using PHONETIC TRANSLITERATION from the English title.\n"
+            "Return a single JSON object of the form:\n"
+            "{\n"
+            '  \"BGG_ID\": {\n'
+            '    \"title\": { \"LANG\": \"...\" },\n'
+            '    \"description\": { \"LANG\": \"...\" }\n'
+            "  },\n"
+            "  ...\n"
+            "}\n"
+            "Only include languages and fields that were requested in the input. "
+            "Return only JSON, no commentary, no explanation.\n\n"
+            f"REQUEST:\n{json.dumps(request_games, ensure_ascii=False)}"
         )
 
         try:
@@ -214,12 +259,16 @@ def run_localized_translation():
                 update = {"updated_at": firestore.SERVER_TIMESTAMP}
 
                 for lang in TARGET_LANGS:
-                    # Only fill empty fields - don't overwrite existing translations
-                    if not (d.get("title", {}) or {}).get(lang, "").strip() and lang in trans.get("title", {}):
+                    # Only fill empty fields - don't overwrite existing translations.
+                    if (
+                        not (d.get("title", {}) or {}).get(lang, "").strip()
+                        and lang in (trans.get("title") or {})
+                    ):
                         update[f"title.{lang}"] = trans["title"][lang]
-                    if not (d.get("summary_description", d.get("summary", {})) or {}).get(lang, "").strip() and lang in trans.get("summary", {}):
-                        update[f"summary_description.{lang}"] = trans["summary"][lang]
-                    if not (d.get("description", {}) or {}).get(lang, "").strip() and lang in trans.get("description", {}):
+                    if (
+                        not (d.get("description", {}) or {}).get(lang, "").strip()
+                        and lang in (trans.get("description") or {})
+                    ):
                         update[f"description.{lang}"] = trans["description"][lang]
 
                 if len(update) > 1:  # more than just updated_at
